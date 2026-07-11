@@ -23,8 +23,13 @@ pub const DISCORD_URL: &str = "https://discord.gg/gtrp";
 
 /// URL de base des ressources distantes (manifest + fichiers du modpack + news).
 /// Le launcher ira chercher `{ASSET_BASE_URL}/manifest.json` et `{ASSET_BASE_URL}/news.json`.
+///
+/// IMPORTANT : cette URL pointe vers un tag GitHub *permanent* (`modpack`), et non
+/// vers une version figee. Pour publier un nouveau modpack, il suffit de remplacer
+/// les assets (manifest.json + zip) de la release `modpack` : le launcher deja
+/// installe chez les joueurs recuperera la mise a jour sans etre reconstruit.
 pub const ASSET_BASE_URL: &str =
-    "https://github.com/Vans74/GTRP-Launcher/releases/download/modpack-1.0.0";
+    "https://github.com/Vans74/GTRP-Launcher/releases/download/modpack";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PublicConfig {
