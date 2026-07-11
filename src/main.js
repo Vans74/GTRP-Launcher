@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 
 // Détecte si on tourne bien dans Tauri (sinon : aperçu navigateur, mode dégradé).
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -14,6 +16,7 @@ const state = {
   gameReady: false,
   updating: false,
   needsUpdate: false,
+  launcherUpdating: false,
 };
 
 /* ---------------- Utilitaires ---------------- */
@@ -271,6 +274,37 @@ async function launch() {
   }
 }
 
+async function checkLauncherUpdate() {
+  if (!IN_TAURI || state.launcherUpdating) return;
+  try {
+    const update = await check();
+    if (!update) return;
+
+    state.launcherUpdating = true;
+    toast(`Mise à jour du launcher ${update.version}…`, "info", 12000);
+
+    let downloaded = 0;
+    let total = 0;
+    await update.downloadAndInstall((event) => {
+      if (event.event === "Started" && event.data?.contentLength) {
+        total = event.data.contentLength;
+        setProgress(0, total, "Mise à jour du launcher");
+      } else if (event.event === "Progress") {
+        downloaded += event.data.chunkLength;
+        setProgress(downloaded, total || downloaded, "Mise à jour du launcher");
+      } else if (event.event === "Finished") {
+        el("progress").hidden = true;
+      }
+    });
+
+    toast("Redémarrage du launcher…", "success", 3000);
+    await relaunch();
+  } catch (e) {
+    state.launcherUpdating = false;
+    console.warn("launcher update:", e);
+  }
+}
+
 /* ---------------- Initialisation ---------------- */
 
 async function init() {
@@ -320,6 +354,9 @@ async function init() {
 
   renderGamePath();
   updatePlayButton();
+
+  // Mise à jour automatique du launcher (avant le reste).
+  await checkLauncherUpdate();
 
   // Chargements réseau
   await detectGame();

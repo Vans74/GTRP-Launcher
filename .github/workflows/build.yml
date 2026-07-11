@@ -1,8 +1,7 @@
 name: Build GTRP Launcher (Windows)
 
-# Compile l'installeur Windows sans qu'aucune machine Windows locale ne soit nécessaire.
-# Ce dépôt a "launcher/" pour racine : les chemins sont donc relatifs à cette racine.
-# Déclenché manuellement (Run workflow) ou à chaque tag "v*".
+# Compile l'installeur Windows + artefacts d'auto-update signes.
+# Chaque tag v* publie une GitHub Release avec latest.json (updater Tauri).
 
 on:
   push:
@@ -10,8 +9,10 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  # 1) Tests rapides de la logique métier (crate core, sans GUI) sous Linux.
   test-core:
     runs-on: ubuntu-latest
     steps:
@@ -21,7 +22,6 @@ jobs:
         working-directory: src-tauri/core
         run: cargo test
 
-  # 2) Build de l'installeur Windows.
   build-windows:
     needs: test-core
     runs-on: windows-latest
@@ -44,11 +44,29 @@ jobs:
       - name: Install frontend deps
         run: npm ci
 
-      - name: Build (Tauri + NSIS)
+      - name: Build (Tauri + NSIS + updater)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build
 
-      - name: Upload installeur
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: GTRP Launcher ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.nsis.zip
+            src-tauri/target/release/bundle/nsis/*.sig
+            src-tauri/target/release/bundle/nsis/latest.json
+
+      - name: Upload installeur (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: gtrp-launcher-windows
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe

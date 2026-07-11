@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "GTRP Launcher",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "fr.gtrp.launcher",
   "build": {
     "frontendDist": "../dist",
@@ -30,6 +30,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,6 +42,17 @@
       "nsis": {
         "installMode": "currentUser",
         "languages": ["French"]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCOTNGQTVFMEM0QjUwQzIKUldUQ1VFc01YdnFUVzBHbm5TY3pucFhUL3FiOFJ3Z0lmMFl1eHVWcUY4QmdFaGlNZExsQjNFRncK",
+      "endpoints": [
+        "https://github.com/Vans74/GTRP-Launcher/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

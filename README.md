@@ -13,6 +13,29 @@ légère (~5–10 Mo) et aux couleurs du serveur.
 - **Vérification d'intégrité / anti-triche léger** : contrôle des fichiers attendus
   et détection de fichiers interdits (`*.asi`, `cleo/*`, …).
 - **Actualités / changelog** intégrés (`news.json` distant) et liens Discord / site.
+- **Auto-update du launcher** : à chaque ouverture, le launcher vérifie une nouvelle version,
+  télécharge le patch signé, s'installe et redémarre — **sans réinstallation manuelle**.
+
+## Auto-update du launcher (pour les joueurs)
+
+À partir de la **v0.1.2**, le launcher se met à jour tout seul :
+
+1. Au démarrage, il interroge `latest.json` sur GitHub Releases.
+2. Si une version plus récente existe, il télécharge le patch (barre de progression).
+3. Il installe en mode silencieux et redémarre automatiquement.
+
+**Important :** les joueurs sur v0.1.0 ou v0.1.1 doivent installer **une dernière fois** la v0.1.2.
+Ensuite, toutes les futures mises à jour sont automatiques.
+
+Pour publier une nouvelle version côté staff :
+
+```bash
+# 1. Bumper la version dans package.json, src-tauri/Cargo.toml, tauri.conf.json
+# 2. Commit + tag
+git tag v0.1.3
+git push origin main --tags
+# 3. La CI build, signe et publie automatiquement la GitHub Release avec latest.json
+```
 
 ## Architecture
 
