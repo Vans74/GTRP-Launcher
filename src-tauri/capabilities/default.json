@@ -12,6 +12,6 @@
     "dialog:default",
     "opener:default",
     "updater:default",
-    "process:allow-restart"
+    "process:default"
   ]
 }

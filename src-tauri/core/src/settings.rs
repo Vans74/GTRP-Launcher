@@ -5,7 +5,7 @@ use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     /// Pseudo utilisé pour se connecter en jeu.
     #[serde(default)]
@@ -16,6 +16,24 @@ pub struct Settings {
     /// Chemin absolu vers samp.exe (déduit si absent).
     #[serde(default)]
     pub samp_path: Option<String>,
+    /// Active l'ENB GTRP (SA DirectX 3.0) au lancement.
+    #[serde(default = "default_enhanced_graphics")]
+    pub enhanced_graphics: bool,
+}
+
+fn default_enhanced_graphics() -> bool {
+    true
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            nickname: String::new(),
+            gta_path: None,
+            samp_path: None,
+            enhanced_graphics: true,
+        }
+    }
 }
 
 fn settings_file(config_dir: &Path) -> PathBuf {

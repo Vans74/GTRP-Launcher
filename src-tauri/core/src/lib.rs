@@ -4,6 +4,7 @@
 //! compilable et testable sur n'importe quelle plateforme (Linux/CI inclus).
 
 pub mod config;
+pub mod enb;
 pub mod error;
 pub mod gta;
 pub mod launch;

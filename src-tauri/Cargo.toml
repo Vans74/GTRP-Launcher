@@ -1,6 +1,6 @@
 [package]
 name = "gtrp-launcher"
-version = "0.1.2"
+version = "0.1.3"
 description = "Launcher officiel du serveur GTRP (Grand Theft RolePlay) - SA-MP"
 authors = ["GTRP"]
 license = ""
@@ -27,6 +27,7 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 gtrp-core = { path = "core" }
 
 [profile.release]

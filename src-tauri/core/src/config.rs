@@ -23,7 +23,8 @@ pub const DISCORD_URL: &str = "https://discord.gg/gtrp";
 
 /// URL de base des ressources distantes (manifest + fichiers du modpack + news).
 /// Le launcher ira chercher `{ASSET_BASE_URL}/manifest.json` et `{ASSET_BASE_URL}/news.json`.
-pub const ASSET_BASE_URL: &str = "https://gtrp.fr/launcher";
+pub const ASSET_BASE_URL: &str =
+    "https://github.com/Vans74/GTRP-Launcher/releases/download/modpack-1.0.0";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PublicConfig {

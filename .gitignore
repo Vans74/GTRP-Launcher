@@ -11,3 +11,5 @@ src-tauri/gen/schemas/
 # Divers
 .DS_Store
 *.log
+modpack-work/
+*.rar

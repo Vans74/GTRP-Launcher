@@ -12,6 +12,14 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ManifestBundle {
+    pub url: String,
+    pub sha256: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Manifest {
     /// Version du modpack (affichée dans l'UI).
     #[serde(default)]
@@ -19,6 +27,9 @@ pub struct Manifest {
     /// URL de base pour construire les URLs de fichiers si `url` est absent.
     #[serde(default)]
     pub base_url: String,
+    /// Archive ZIP optionnelle (modpack complet en un seul téléchargement).
+    #[serde(default)]
+    pub bundle: Option<ManifestBundle>,
     /// Fichiers attendus.
     #[serde(default)]
     pub files: Vec<ManifestFile>,
@@ -54,6 +65,7 @@ pub struct PlannedFile {
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdatePlan {
     pub up_to_date: bool,
+    pub bundle: Option<ManifestBundle>,
     pub files: Vec<PlannedFile>,
     pub total_bytes: u64,
     pub manifest_version: String,
@@ -124,38 +136,77 @@ pub fn fetch_manifest(url: &str) -> Result<Manifest> {
     Ok(manifest)
 }
 
+/// Fichier témoin de version du modpack installé.
+pub const MODPACK_VERSION_FILE: &str = "gtrp-assets/.modpack_version";
+
+fn installed_modpack_version(gta_root: &Path) -> Option<String> {
+    let path = gta_root.join(MODPACK_VERSION_FILE);
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+}
+
+fn write_modpack_version(gta_root: &Path, version: &str) -> Result<()> {
+    let path = gta_root.join(MODPACK_VERSION_FILE);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, version)?;
+    Ok(())
+}
+
 /// Compare le manifest avec l'état local et calcule la liste des fichiers à mettre à jour.
 pub fn plan_updates(manifest: &Manifest, gta_root: &Path) -> Result<UpdatePlan> {
     let mut files = Vec::new();
     let mut total = 0u64;
 
-    for f in &manifest.files {
-        let dest = safe_join(gta_root, &f.path)?;
-        let expected = f.sha256.to_ascii_lowercase();
+    let needs_bundle = manifest
+        .bundle
+        .as_ref()
+        .map(|_| {
+            installed_modpack_version(gta_root).as_deref() != Some(manifest.version.as_str())
+                || !gta_root.join("gtrp-assets/enb").is_dir()
+        })
+        .unwrap_or(false);
 
-        let needs = if !dest.is_file() {
-            Some("manquant")
-        } else {
-            match sha256_file(&dest) {
-                Ok(local) if local.eq_ignore_ascii_case(&expected) => None,
-                _ => Some("obsolète"),
+    if needs_bundle {
+        if let Some(ref b) = manifest.bundle {
+            total += b.size;
+        }
+    }
+
+    if !needs_bundle {
+        for f in &manifest.files {
+            let dest = safe_join(gta_root, &f.path)?;
+            let expected = f.sha256.to_ascii_lowercase();
+
+            let needs = if !dest.is_file() {
+                Some("manquant")
+            } else {
+                match sha256_file(&dest) {
+                    Ok(local) if local.eq_ignore_ascii_case(&expected) => None,
+                    _ => Some("obsolète"),
+                }
+            };
+
+            if let Some(reason) = needs {
+                total += f.size;
+                files.push(PlannedFile {
+                    path: f.path.clone(),
+                    url: resolve_url(&manifest.base_url, f),
+                    sha256: expected,
+                    size: f.size,
+                    reason: reason.to_string(),
+                });
             }
-        };
-
-        if let Some(reason) = needs {
-            total += f.size;
-            files.push(PlannedFile {
-                path: f.path.clone(),
-                url: resolve_url(&manifest.base_url, f),
-                sha256: expected,
-                size: f.size,
-                reason: reason.to_string(),
-            });
         }
     }
 
     Ok(UpdatePlan {
-        up_to_date: files.is_empty(),
+        up_to_date: !needs_bundle && files.is_empty(),
+        bundle: if needs_bundle {
+            manifest.bundle.clone()
+        } else {
+            None
+        },
         total_bytes: total,
         files,
         manifest_version: manifest.version.clone(),
@@ -226,10 +277,42 @@ pub fn apply_updates<F: FnMut(Progress)>(
     gta_root: &Path,
     mut progress: F,
 ) -> Result<()> {
-    let files_total = plan.files.len();
-    let bytes_total = plan.total_bytes.max(1);
     let mut bytes_done = 0u64;
+    let bytes_total = plan.total_bytes.max(1);
 
+    if let Some(ref bundle) = plan.bundle {
+        progress(Progress {
+            current_file: "gtrp-modpack.zip".into(),
+            files_done: 0,
+            files_total: 1,
+            bytes_done,
+            bytes_total,
+        });
+        let tmp_zip = gta_root.join("gtrp-modpack.gtrp_part.zip");
+        download_verify(&bundle.url, &tmp_zip, &bundle.sha256, |n| {
+            bytes_done += n;
+            progress(Progress {
+                current_file: "gtrp-modpack.zip".into(),
+                files_done: 0,
+                files_total: 1,
+                bytes_done,
+                bytes_total,
+            });
+        })?;
+        extract_zip(&tmp_zip, gta_root)?;
+        let _ = std::fs::remove_file(&tmp_zip);
+        write_modpack_version(gta_root, &plan.manifest_version)?;
+        bytes_done = bytes_total;
+        progress(Progress {
+            current_file: "Modpack installé".into(),
+            files_done: 1,
+            files_total: 1,
+            bytes_done,
+            bytes_total,
+        });
+    }
+
+    let files_total = plan.files.len();
     for (i, f) in plan.files.iter().enumerate() {
         let dest = safe_join(gta_root, &f.path)?;
         progress(Progress {
@@ -251,6 +334,32 @@ pub fn apply_updates<F: FnMut(Progress)>(
             bytes_done,
             bytes_total,
         });
+    }
+    Ok(())
+}
+
+/// Extrait une archive ZIP dans `dest_root` en bloquant le path traversal.
+fn extract_zip(zip_path: &Path, dest_root: &Path) -> Result<()> {
+    let file = std::fs::File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| LauncherError::Integrity(format!("archive ZIP invalide : {e}")))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| LauncherError::Integrity(format!("entrée ZIP : {e}")))?;
+        let name = entry.name().replace('\\', "/");
+        if name.ends_with('/') {
+            let dir = safe_join(dest_root, name.trim_end_matches('/'))?;
+            std::fs::create_dir_all(dir)?;
+            continue;
+        }
+        let out = safe_join(dest_root, &name)?;
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut out_file = std::fs::File::create(&out)?;
+        std::io::copy(&mut entry, &mut out_file)?;
     }
     Ok(())
 }
@@ -378,6 +487,7 @@ mod tests {
         let manifest = Manifest {
             version: "1.0.0".into(),
             base_url: "https://x/files".into(),
+            bundle: None,
             files: vec![
                 ManifestFile {
                     path: "good.txt".into(),
@@ -426,6 +536,7 @@ mod tests {
         let manifest = Manifest {
             version: "1".into(),
             base_url: "x".into(),
+            bundle: None,
             files: vec![ManifestFile {
                 path: "present.txt".into(),
                 sha256: "wronghash".into(),

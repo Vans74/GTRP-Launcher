@@ -6,7 +6,7 @@
 
 use gtrp_core::config;
 use gtrp_core::error::{LauncherError, Result};
-use gtrp_core::{gta, launch, news, query, settings, updater};
+use gtrp_core::{enb, gta, launch, news, query, settings, updater};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -85,7 +85,16 @@ fn set_game_path(app: AppHandle, gta_exe: String) -> Result<gta::GameInstall> {
 }
 
 #[tauri::command]
-fn launch_game(app: AppHandle) -> Result<()> {
+fn set_enhanced_graphics(app: AppHandle, enabled: bool) -> Result<settings::Settings> {
+    let dir = config_dir(&app)?;
+    let mut s = settings::load(&dir);
+    s.enhanced_graphics = enabled;
+    settings::save(&dir, &s)?;
+    Ok(s)
+}
+
+#[tauri::command]
+fn launch_game(app: AppHandle) -> Result<enb::EnbPrepareResult> {
     let dir = config_dir(&app)?;
     let s = settings::load(&dir);
     if !settings::is_valid_nickname(&s.nickname) {
@@ -94,7 +103,12 @@ fn launch_game(app: AppHandle) -> Result<()> {
         ));
     }
     let install = resolve_install(&app)?;
-    launch::launch(&install, &s.nickname, config::SERVER_HOST, config::SERVER_PORT)
+
+    let enb_result = enb::prepare(Path::new(&install.root), s.enhanced_graphics)?;
+
+    launch::launch(&install, &s.nickname, config::SERVER_HOST, config::SERVER_PORT)?;
+
+    Ok(enb_result)
 }
 
 #[tauri::command]
@@ -153,6 +167,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -168,6 +183,7 @@ pub fn run() {
             get_server_status,
             load_settings,
             set_nickname,
+            set_enhanced_graphics,
             detect_game,
             set_game_path,
             launch_game,

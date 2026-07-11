@@ -267,8 +267,23 @@ async function runUpdatesThenLaunch() {
 
 async function launch() {
   try {
-    await call("launch_game");
-    toast("Lancement du jeu…", "success");
+    const enb = await call("launch_game");
+    if (enb?.message) {
+      const kind = enb.applied ? "success" : "info";
+      toast(enb.message, kind);
+    } else {
+      toast("Lancement du jeu…", "success");
+    }
+  } catch (e) {
+    toast(`${e}`, "error");
+  }
+}
+
+async function saveEnhancedGraphics() {
+  const enabled = el("enhanced-graphics").checked;
+  try {
+    await call("set_enhanced_graphics", { enabled });
+    state.settings.enhanced_graphics = enabled;
   } catch (e) {
     toast(`${e}`, "error");
   }
@@ -329,6 +344,7 @@ async function init() {
     /* aperçu */
   }
   el("nickname").value = state.settings.nickname || "";
+  el("enhanced-graphics").checked = state.settings.enhanced_graphics !== false;
 
   // Événements de progression de mise à jour
   if (IN_TAURI) {
@@ -343,6 +359,7 @@ async function init() {
   el("nickname").addEventListener("change", saveNickname);
   el("nickname").addEventListener("blur", saveNickname);
   el("browse-game").addEventListener("click", browseGame);
+  el("enhanced-graphics").addEventListener("change", saveEnhancedGraphics);
   el("play-btn").addEventListener("click", runUpdatesThenLaunch);
   el("refresh-news").addEventListener("click", refreshNews);
   el("btn-discord").addEventListener("click", () =>
