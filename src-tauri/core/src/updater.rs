@@ -281,6 +281,15 @@ pub fn apply_updates<F: FnMut(Progress)>(
     let bytes_total = plan.total_bytes.max(1);
 
     if let Some(ref bundle) = plan.bundle {
+        // Installation propre : on retire l'ancien déploiement ENB du jeu puis on
+        // purge l'ancien staging, afin qu'aucun fichier obsolète d'un modpack
+        // précédent ne subsiste avant d'extraire le nouveau bundle.
+        let _ = crate::enb::undeploy(gta_root);
+        let old_staging = gta_root.join(crate::enb::ENB_STAGING_REL);
+        if old_staging.exists() {
+            let _ = std::fs::remove_dir_all(&old_staging);
+        }
+
         progress(Progress {
             current_file: "gtrp-modpack.zip".into(),
             files_done: 0,

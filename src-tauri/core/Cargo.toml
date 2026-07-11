@@ -1,6 +1,6 @@
 [package]
 name = "gtrp-core"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "Logique métier du launcher GTRP (query SA-MP, updater, détection du jeu). Sans dépendance GUI, testable partout."
 

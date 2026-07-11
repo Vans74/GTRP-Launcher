@@ -71,6 +71,13 @@ fn activate(gta_root: &Path) -> Result<EnbPrepareResult> {
     })
 }
 
+/// Retire proprement un déploiement ENB précédent du dossier du jeu.
+/// Utilisé par l'updater avant d'installer un nouveau modpack, pour éviter
+/// que d'anciens fichiers (ex. ancien pack ENB) ne subsistent dans le jeu.
+pub fn undeploy(gta_root: &Path) -> Result<()> {
+    deactivate(gta_root)
+}
+
 fn deactivate(gta_root: &Path) -> Result<()> {
     let marker = gta_root.join(ENB_MARKER);
     if !marker.is_file() {
