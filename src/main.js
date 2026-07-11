@@ -245,6 +245,10 @@ async function checkUpdates() {
 }
 
 async function runUpdatesThenLaunch() {
+  // Re-vérifie l'état du modpack juste avant de jouer : évite de lancer avec un
+  // modpack périmé si le launcher est resté ouvert pendant une mise à jour.
+  await checkUpdates();
+
   if (state.needsUpdate) {
     state.updating = true;
     updatePlayButton();

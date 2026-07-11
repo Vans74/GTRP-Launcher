@@ -67,7 +67,7 @@ fn activate(gta_root: &Path) -> Result<EnbPrepareResult> {
 
     Ok(EnbPrepareResult {
         applied: true,
-        message: "Graphismes améliorés (SA DirectX 3.0) activés.".into(),
+        message: "Graphismes améliorés (ENB) activés.".into(),
     })
 }
 
