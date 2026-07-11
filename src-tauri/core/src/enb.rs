@@ -1,4 +1,4 @@
-//! Gestion de l'ENB GTRP (SA DirectX 3.0 - Inari Lú).
+//! Gestion de l'ENB GTRP (SA_DirectX 2.0 par XMakarusX, base ENBSeries 0.313).
 //!
 //! Les fichiers ENB sont stockés dans `{gta_root}/gtrp-assets/enb/` (déployés via le
 //! modpack du launcher). Avant chaque lancement :
