@@ -1,0 +1,13 @@
+# Dépendances
+node_modules/
+
+# Build frontend
+dist/
+
+# Build Rust / Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Divers
+.DS_Store
+*.log

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GTRP Launcher</title>
+  </head>
+  <body>
+    <div class="app">
+      <!-- Fond animé (bannière) + halo -->
+      <div class="bg" aria-hidden="true">
+        <div class="bg-banner"></div>
+        <div class="bg-gradient"></div>
+        <div class="bg-glow"></div>
+      </div>
+
+      <!-- Barre supérieure -->
+      <header class="topbar">
+        <div class="brand">
+          <img class="brand-logo" src="/assets/logo.png" alt="GTRP" />
+          <div class="brand-text">
+            <span class="brand-title" id="server-name">Grand Theft RolePlay</span>
+            <span class="brand-sub">Serveur Roleplay SA-MP</span>
+          </div>
+        </div>
+
+        <div class="status" id="status-pill" data-state="loading">
+          <span class="status-dot"></span>
+          <span class="status-label" id="status-label">Connexion…</span>
+          <span class="status-sep"></span>
+          <span class="status-players" id="status-players">—</span>
+          <span class="status-ping" id="status-ping"></span>
+        </div>
+      </header>
+
+      <!-- Contenu principal -->
+      <main class="content">
+        <section class="hero">
+          <img class="hero-logo" src="/assets/logo.png" alt="GTRP" />
+          <h1 class="hero-title">GRAND THEFT <span>ROLEPLAY</span></h1>
+          <p class="hero-tag">Ta ville. Ton histoire. Ta légende.</p>
+        </section>
+
+        <aside class="panel news-panel">
+          <div class="panel-head">
+            <h2>Actualités</h2>
+            <button class="link-btn" id="refresh-news" title="Rafraîchir">⟳</button>
+          </div>
+          <div class="news-list" id="news-list">
+            <div class="news-empty">Chargement des actualités…</div>
+          </div>
+        </aside>
+      </main>
+
+      <!-- Barre d'action -->
+      <footer class="actionbar">
+        <div class="field nickname-field">
+          <label for="nickname">Pseudo</label>
+          <input
+            id="nickname"
+            type="text"
+            maxlength="24"
+            placeholder="TonPseudo_RP"
+            spellcheck="false"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="game-info">
+          <div class="game-path" id="game-path" title="Emplacement de GTA San Andreas">
+            <span class="game-path-label">Jeu :</span>
+            <span class="game-path-value" id="game-path-value">Détection…</span>
+          </div>
+          <button class="mini-btn" id="browse-game">Modifier</button>
+        </div>
+
+        <div class="play-zone">
+          <div class="progress" id="progress" hidden>
+            <div class="progress-bar" id="progress-bar"></div>
+            <span class="progress-text" id="progress-text"></span>
+          </div>
+          <button class="play-btn" id="play-btn" disabled>
+            <span class="play-label" id="play-label">JOUER</span>
+            <span class="play-sub" id="play-sub"></span>
+          </button>
+        </div>
+      </footer>
+
+      <!-- Liens sociaux -->
+      <div class="socials">
+        <button class="social" id="btn-discord" title="Discord">Discord</button>
+        <button class="social" id="btn-web" title="Site web">Site web</button>
+        <span class="version" id="version">v0.0.0</span>
+      </div>
+
+      <!-- Zone de notifications -->
+      <div class="toasts" id="toasts"></div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
