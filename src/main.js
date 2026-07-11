@@ -17,6 +17,7 @@ const state = {
   updating: false,
   needsUpdate: false,
   launcherUpdating: false,
+  lastUpdateCheck: 0,
 };
 
 /* ---------------- Utilitaires ---------------- */
@@ -383,6 +384,28 @@ async function init() {
 
   // Rafraîchissement périodique du statut
   setInterval(refreshStatus, 30000);
+
+  // Re-vérifie périodiquement les mises à jour (launcher + modpack) : plus besoin
+  // de redémarrer le launcher pour qu'une nouvelle version soit détectée.
+  setInterval(checkForUpdates, 5 * 60 * 1000);
+
+  // Re-vérifie aussi dès que la fenêtre reprend le focus (retour d'alt-tab),
+  // avec un throttle pour éviter les appels réseau à répétition.
+  window.addEventListener("focus", () => {
+    const now = Date.now();
+    if (now - state.lastUpdateCheck < 30000) return;
+    checkForUpdates();
+  });
+}
+
+/** Vérifie à la fois la mise à jour du launcher et celle du modpack. */
+async function checkForUpdates() {
+  // On ne perturbe pas une mise à jour du modpack en cours (évite un
+  // redémarrage du launcher au milieu d'un téléchargement).
+  if (state.updating) return;
+  state.lastUpdateCheck = Date.now();
+  await checkLauncherUpdate();
+  await checkUpdates();
 }
 
 window.addEventListener("DOMContentLoaded", init);
