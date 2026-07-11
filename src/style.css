@@ -55,35 +55,39 @@ input {
   z-index: 0;
   overflow: hidden;
 }
-.bg-banner {
-  position: absolute;
-  inset: -10%;
-  background: url("/assets/banner.gif") center/cover no-repeat;
-  opacity: 0.28;
-  filter: saturate(1.1) blur(1px);
-  transform: scale(1.05);
-}
 .bg-gradient {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(180deg, rgba(5, 8, 13, 0.55) 0%, rgba(5, 8, 13, 0.85) 55%, var(--bg-0) 100%),
-    radial-gradient(1200px 500px at 20% -10%, rgba(24, 165, 230, 0.22), transparent 60%);
+    linear-gradient(160deg, #0c1826 0%, #070d16 45%, var(--bg-0) 100%),
+    radial-gradient(1200px 520px at 18% -12%, rgba(24, 165, 230, 0.18), transparent 60%),
+    radial-gradient(900px 500px at 100% 120%, rgba(10, 108, 166, 0.16), transparent 60%);
 }
 .bg-glow {
   position: absolute;
   width: 620px;
   height: 620px;
-  left: -160px;
-  bottom: -220px;
+  left: -180px;
+  bottom: -240px;
   background: radial-gradient(circle, var(--blue-glow), transparent 65%);
-  filter: blur(30px);
-  opacity: 0.5;
-  animation: pulse 6s ease-in-out infinite;
+  filter: blur(40px);
+  opacity: 0.4;
+  animation: pulse 9s ease-in-out infinite;
+}
+.bg-glow-2 {
+  left: auto;
+  bottom: auto;
+  right: -220px;
+  top: -260px;
+  width: 560px;
+  height: 560px;
+  background: radial-gradient(circle, rgba(10, 108, 166, 0.4), transparent 65%);
+  opacity: 0.35;
+  animation: none;
 }
 @keyframes pulse {
-  0%, 100% { opacity: 0.35; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(1.08); }
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.48; transform: scale(1.05); }
 }
 
 /* ---------- Barre supérieure ---------- */
@@ -440,7 +444,7 @@ input {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 22px 14px;
+  padding: 14px 22px 18px;
 }
 .social {
   padding: 7px 16px;
