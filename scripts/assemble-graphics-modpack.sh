@@ -20,7 +20,8 @@ if [[ -d "$BASE_REPO" ]]; then BASE="$BASE_REPO"
 elif [[ -d "$BASE_TMP" ]]; then BASE="$BASE_TMP"
 else echo "ERREUR: base graphique introuvable." >&2; exit 1; fi
 
-# NOTE (v1.34.1) : … + GraphicRestore.asi (SAMP Graphic Restore, requis Proper Shaders).
+# NOTE (v1.35.0) : Proper Shaders TEMPORAIREMENT DÉSACTIVÉ (test freezes).
+# SAMPGraphicRestore.asi retiré de la base (requis uniquement par Proper Shaders).
 # Atmosphere UI + Infernus DE + Vanilla + roads + OE Mod + Next Gen Weapon Sounds
 # + Skin véhicule 597. Real Skybox RETIRÉ (incompatible Proper Shaders).
 # Radar DE et Absolute Atmosphere UI sont fournis en DOSSIERS extraits dans
@@ -166,19 +167,17 @@ print(f"  -> copcarsf.dff patché ({old.decode()} → {new.decode()})")
 PY
 echo "  -> $(( ${#SKIN_TXD[@]} + 1 )) fichier(s) véhicule 597"
 
-# 17) Proper Shaders → modloader/Proper Shaders/ (preset medium par défaut) ---
-# Incompatible avec Real Skybox (retiré). ReShade : reverse Z activé dans ReShade.ini.
-# SAMPGraphicRestore.asi (nom EXACT requis par ProperShaders) livré via la base.
-echo "=== Proper Shaders ==="
-PS_SRC="$MODS_SRC/Shaders/Proper Shaders"
-PS_PRESET="$MODS_SRC/Shaders/(presets)/(3a- medium - DEFAULT)/ProperShaders.ini"
-[[ -d "$PS_SRC" ]] || { echo "ERREUR: 'Shaders/Proper Shaders' introuvable dans mods-src" >&2; exit 1; }
-[[ -f "$PS_PRESET" ]] || { echo "ERREUR: preset Proper Shaders (3a medium) introuvable" >&2; exit 1; }
-cp -a "$PS_SRC" "$ML/Proper Shaders"
-cp -f "$PS_PRESET" "$ML/Proper Shaders/ProperShaders.ini"
-# ProperFixes (extras) : supprime l'avertissement SkyGfx, compatible Proper Shaders.
-PF="$MODS_SRC/Shaders/(extras)/(fix proper fixes warning)/Proper Fixes/ProperFixes.asi"
-[[ -f "$PF" ]] && cp -f "$PF" "$STAGING/"
+# 17) Proper Shaders → DÉSACTIVÉ (test freezes — réactiver section si innocent).
+# echo "=== Proper Shaders ==="
+# PS_SRC="$MODS_SRC/Shaders/Proper Shaders"
+# PS_PRESET="$MODS_SRC/Shaders/(presets)/(3a- medium - DEFAULT)/ProperShaders.ini"
+# [[ -d "$PS_SRC" ]] || { echo "ERREUR: 'Shaders/Proper Shaders' introuvable dans mods-src" >&2; exit 1; }
+# [[ -f "$PS_PRESET" ]] || { echo "ERREUR: preset Proper Shaders (3a medium) introuvable" >&2; exit 1; }
+# cp -a "$PS_SRC" "$ML/Proper Shaders"
+# cp -f "$PS_PRESET" "$ML/Proper Shaders/ProperShaders.ini"
+# PF="$MODS_SRC/Shaders/(extras)/(fix proper fixes warning)/Proper Fixes/ProperFixes.asi"
+# [[ -f "$PF" ]] && cp -f "$PF" "$STAGING/"
+echo "=== Proper Shaders : DÉSACTIVÉ (test freezes) ==="
 
 # --- Rapport de contrôle ----------------------------------------------------
 REPORT="$ROOT/modpack-work/build-report.txt"
