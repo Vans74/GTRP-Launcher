@@ -7,6 +7,7 @@ pub mod config;
 pub mod enb;
 pub mod error;
 pub mod gta;
+pub mod laa;
 pub mod launch;
 pub mod news;
 pub mod query;

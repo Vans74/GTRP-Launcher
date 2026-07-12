@@ -48,6 +48,15 @@ pub fn launch(install: &GameInstall, nickname: &str, host: &str, port: u16) -> R
     // « Fix Problems Win 10 » livrés avec les packs ENB, mais automatique.
     apply_enb_compat_fix(&install.gta_exe);
 
+    // 1ter) Patch « 4 Go » (Large Address Aware) sur gta_sa.exe.
+    // Le jeu 32 bits est bridé à ~2 Go ; avec le pack graphique + le streaming
+    // d'objets textés du serveur (SetObjectMaterialText → polices GDI), les
+    // allocations finissent par échouer (« Can't create font … ») puis le jeu
+    // plante. Poser le drapeau LAA porte la limite à ~4 Go. Best-effort :
+    // idempotent, avec sauvegarde ; un échec (exe verrouillé / droits) ne doit
+    // jamais empêcher de jouer.
+    let _ = crate::laa::set_large_address_aware(Path::new(&install.gta_exe));
+
     // 2) Lancement de samp.exe avec l'adresse du serveur.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let work_dir = Path::new(samp_exe).parent();
