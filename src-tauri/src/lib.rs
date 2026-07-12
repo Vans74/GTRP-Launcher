@@ -126,14 +126,22 @@ async fn check_updates(app: AppHandle) -> Result<updater::UpdatePlan> {
 #[tauri::command]
 async fn apply_updates(app: AppHandle) -> Result<()> {
     let install = resolve_install(&app)?;
+    let cfg = config_dir(&app)?;
+    let enhanced = settings::load(&cfg).enhanced_graphics;
     let manifest_url = format!("{}/manifest.json", config::ASSET_BASE_URL);
     let app_for_events = app.clone();
+    let gta_root = install.root.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let manifest = updater::fetch_manifest(&manifest_url)?;
-        let plan = updater::plan_updates(&manifest, Path::new(&install.root))?;
-        updater::apply_updates(&plan, Path::new(&install.root), |p| {
+        let plan = updater::plan_updates(&manifest, Path::new(&gta_root))?;
+        updater::apply_updates(&plan, Path::new(&gta_root), |p| {
             let _ = app_for_events.emit("update-progress", &p);
         })?;
+        // Redéploie les graphismes si le joueur les avait activés (sinon SALodLights
+        // et autres ASI restent absents de la racine après une mise à jour bundle).
+        if enhanced {
+            let _ = enb::prepare(Path::new(&gta_root), true)?;
+        }
         let _ = app_for_events.emit("update-done", ());
         Ok::<(), LauncherError>(())
     })

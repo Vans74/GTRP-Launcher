@@ -37,6 +37,10 @@ pub const LOADER_TARGET_NAME: &str = "vorbisFile.dll";
 /// Sauvegarde du `vorbisFile.dll` d'origine du jeu (le loader y relaie l'audio OGG).
 pub const LOADER_BACKUP_NAME: &str = "vorbisFileHooked.dll";
 
+/// Fichiers Project2DFX (SALodLights) : les trois doivent être à la racine du jeu.
+/// Sans le `.dat` à côté du `.asi`, l'ASI Loader affiche l'erreur 126.
+const PROJECT2DFX_FILES: &[&str] = &["SALodLights.asi", "SALodLights.dat", "SALodLights.ini"];
+
 #[derive(Debug, Clone, Serialize)]
 pub struct EnbPrepareResult {
     pub applied: bool,
@@ -82,8 +86,12 @@ fn activate(gta_root: &Path) -> Result<EnbPrepareResult> {
 
     // Nettoie un déploiement précédent avant de recopier.
     let _ = deactivate(gta_root);
+    purge_project2dfx_orphans(gta_root);
 
     copy_dir_recursive(&staging, gta_root, &staging)?;
+
+    // Project2DFX : copie explicite + vérif (évite l'erreur ASI Loader 126 si .dat absent).
+    deploy_project2dfx(gta_root, &staging)?;
 
     // Installe l'ASI loader en vorbisFile.dll (avec sauvegarde de l'original)
     // pour que modloader et les autres .asi se chargent chez tous les joueurs.
@@ -167,6 +175,7 @@ fn deactivate(gta_root: &Path) -> Result<()> {
     let staging = staging_dir(gta_root);
     if staging.is_dir() {
         remove_staged_files(&staging, gta_root, &staging)?;
+        purge_project2dfx_orphans(gta_root);
         // Restaure le vorbisFile.dll d'origine (retire notre loader).
         uninstall_asi_loader(gta_root, &staging);
     }
@@ -193,6 +202,36 @@ fn copy_dir_recursive(src: &Path, dst_root: &Path, src_base: &Path) -> Result<()
                 fs::create_dir_all(parent)?;
             }
             fs::copy(&path, &dest)?;
+        }
+    }
+    Ok(())
+}
+
+/// Retire d'éventuels restes Project2DFX (ex. .asi sans .dat d'une ancienne install).
+fn purge_project2dfx_orphans(gta_root: &Path) {
+    for name in PROJECT2DFX_FILES {
+        let _ = fs::remove_file(gta_root.join(name));
+    }
+}
+
+/// Déploie Project2DFX à la racine du jeu si présent dans le staging.
+fn deploy_project2dfx(gta_root: &Path, staging: &Path) -> Result<()> {
+    if !staging.join("SALodLights.asi").is_file() {
+        return Ok(());
+    }
+    for name in PROJECT2DFX_FILES {
+        let src = staging.join(name);
+        if !src.is_file() {
+            return Err(LauncherError::Other(format!(
+                "Project2DFX incomplet dans le modpack : {name} manquant dans gtrp-assets/enb/"
+            )));
+        }
+        let dst = gta_root.join(name);
+        fs::copy(&src, &dst)?;
+        if !dst.is_file() {
+            return Err(LauncherError::Other(format!(
+                "Échec du déploiement de Project2DFX : {name} introuvable dans le dossier du jeu"
+            )));
         }
     }
     Ok(())
@@ -261,6 +300,25 @@ mod tests {
         let game = tmp("nopack");
         let r = prepare(&game, true).unwrap();
         assert!(!r.applied);
+        let _ = fs::remove_dir_all(&game);
+    }
+
+    #[test]
+    fn project2dfx_deploys_trio_to_game_root() {
+        let game = tmp("p2dfx");
+        let staging = staging_dir(&game);
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("d3d9.dll"), b"reshade").unwrap();
+        fs::write(staging.join("SALodLights.asi"), b"asi").unwrap();
+        fs::write(staging.join("SALodLights.dat"), b"dat").unwrap();
+        fs::write(staging.join("SALodLights.ini"), b"ini").unwrap();
+
+        let r = prepare(&game, true).unwrap();
+        assert!(r.applied);
+        assert!(game.join("SALodLights.asi").is_file());
+        assert!(game.join("SALodLights.dat").is_file());
+        assert!(game.join("SALodLights.ini").is_file());
+
         let _ = fs::remove_dir_all(&game);
     }
 
