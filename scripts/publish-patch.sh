@@ -84,13 +84,15 @@ for attempt in 1 2 3 4 5; do
 done
 [[ -n "$LIVE_MANIFEST" ]] || { echo "ERREUR: impossible de récupérer le manifeste live." >&2; exit 1; }
 
-LIVE_MANIFEST="$LIVE_MANIFEST" NEW_VERSION="$NEW_VERSION" SPECS="${NEW_FILES_SPECS[*]}" python3 - > "$ROOT/modpack-work/manifest.json" <<'PY'
+LIVE_MANIFEST="$LIVE_MANIFEST" NEW_VERSION="$NEW_VERSION" SPECS="$(printf '%s\n' "${NEW_FILES_SPECS[@]}")" python3 - > "$ROOT/modpack-work/manifest.json" <<'PY'
 import os, sys, json
 m = json.loads(os.environ["LIVE_MANIFEST"])
 m["version"] = os.environ["NEW_VERSION"]
 m["bundle_required"] = False
 files = []
-for spec in os.environ["SPECS"].split():
+for spec in os.environ["SPECS"].splitlines():
+    if not spec.strip():
+        continue
     path, sha, size, url = spec.split("|")
     files.append({"path": path, "sha256": sha, "size": int(size), "url": url})
 m["files"] = files
