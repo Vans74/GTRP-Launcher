@@ -30,6 +30,11 @@ pub struct Manifest {
     /// Archive ZIP optionnelle (modpack complet en un seul téléchargement).
     #[serde(default)]
     pub bundle: Option<ManifestBundle>,
+    /// Si `true` (défaut), un changement de `version` force le téléchargement du bundle.
+    /// Mettre à `false` pour les patchs légers : seuls les fichiers listés dans `files`
+    /// sont téléchargés, même si la version change.
+    #[serde(default = "default_bundle_required")]
+    pub bundle_required: bool,
     /// Fichiers attendus.
     #[serde(default)]
     pub files: Vec<ManifestFile>,
@@ -115,6 +120,10 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+fn default_bundle_required() -> bool {
+    true
+}
+
 fn resolve_url(base_url: &str, file: &ManifestFile) -> String {
     if let Some(u) = &file.url {
         return u.clone();
@@ -177,12 +186,19 @@ pub fn plan_updates(manifest: &Manifest, gta_root: &Path) -> Result<UpdatePlan> 
     let mut files = Vec::new();
     let mut total = 0u64;
 
+    let installed_ver = installed_modpack_version(gta_root);
+    let staging_missing = !gta_root.join("gtrp-assets/enb").is_dir();
+    let version_changed = installed_ver.as_deref() != Some(manifest.version.as_str());
+
+    // Bundle complet : première installation, ou changement de version sur une release
+    // « lourde » (bundle_required=true, défaut). Les patchs légers passent bundle_required=false.
     let needs_bundle = manifest
         .bundle
         .as_ref()
         .map(|_| {
-            installed_modpack_version(gta_root).as_deref() != Some(manifest.version.as_str())
-                || !gta_root.join("gtrp-assets/enb").is_dir()
+            staging_missing
+                || installed_ver.is_none()
+                || (version_changed && manifest.bundle_required)
         })
         .unwrap_or(false);
 
@@ -219,8 +235,10 @@ pub fn plan_updates(manifest: &Manifest, gta_root: &Path) -> Result<UpdatePlan> 
         }
     }
 
+    let version_ok = installed_ver.as_deref() == Some(manifest.version.as_str());
+
     Ok(UpdatePlan {
-        up_to_date: !needs_bundle && files.is_empty(),
+        up_to_date: !needs_bundle && files.is_empty() && version_ok,
         bundle: if needs_bundle {
             manifest.bundle.clone()
         } else {
@@ -363,6 +381,14 @@ pub fn apply_updates<F: FnMut(Progress)>(
             bytes_total,
         });
     }
+
+    // Après un patch fichier-à-fichier, synchroniser le témoin de version.
+    if plan.bundle.is_none()
+        && installed_modpack_version(gta_root).as_deref() != Some(plan.manifest_version.as_str())
+    {
+        write_modpack_version(gta_root, &plan.manifest_version)?;
+    }
+
     Ok(())
 }
 
@@ -516,6 +542,7 @@ mod tests {
             version: "1.0.0".into(),
             base_url: "https://x/files".into(),
             bundle: None,
+            bundle_required: true,
             files: vec![
                 ManifestFile {
                     path: "good.txt".into(),
@@ -543,6 +570,68 @@ mod tests {
     }
 
     #[test]
+    fn plan_patch_skips_bundle_when_bundle_not_required() {
+        let dir = tmp_dir("patch");
+        std::fs::create_dir_all(dir.join("gtrp-assets/enb")).unwrap();
+        std::fs::write(dir.join("gtrp-assets/.modpack_version"), "1.0.0").unwrap();
+
+        let dff = dir.join("modloader/patch.dff");
+        std::fs::create_dir_all(dff.parent().unwrap()).unwrap();
+        std::fs::write(&dff, b"old").unwrap();
+
+        let manifest = Manifest {
+            version: "1.1.0".into(),
+            base_url: "https://x/files".into(),
+            bundle: Some(ManifestBundle {
+                url: "https://x/bundle.zip".into(),
+                sha256: "abc".into(),
+                size: 260_000_000,
+            }),
+            bundle_required: false,
+            files: vec![ManifestFile {
+                path: "modloader/patch.dff".into(),
+                sha256: "deadbeef".into(),
+                size: 4,
+                url: None,
+            }],
+            forbidden: vec![],
+        };
+
+        let plan = plan_updates(&manifest, &dir).unwrap();
+        assert!(!plan.up_to_date);
+        assert!(plan.bundle.is_none());
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.total_bytes, 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plan_version_change_forces_bundle_by_default() {
+        let dir = tmp_dir("full");
+        std::fs::create_dir_all(dir.join("gtrp-assets/enb")).unwrap();
+        std::fs::write(dir.join("gtrp-assets/.modpack_version"), "1.0.0").unwrap();
+
+        let manifest = Manifest {
+            version: "2.0.0".into(),
+            base_url: "https://x/files".into(),
+            bundle: Some(ManifestBundle {
+                url: "https://x/bundle.zip".into(),
+                sha256: "abc".into(),
+                size: 260_000_000,
+            }),
+            bundle_required: true,
+            files: vec![],
+            forbidden: vec![],
+        };
+
+        let plan = plan_updates(&manifest, &dir).unwrap();
+        assert!(!plan.up_to_date);
+        assert!(plan.bundle.is_some());
+        assert_eq!(plan.total_bytes, 260_000_000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn forbidden_scan_matches_patterns() {
         let dir = tmp_dir("forb");
         std::fs::create_dir_all(dir.join("cleo")).unwrap();
@@ -565,6 +654,7 @@ mod tests {
             version: "1".into(),
             base_url: "x".into(),
             bundle: None,
+            bundle_required: true,
             files: vec![ManifestFile {
                 path: "present.txt".into(),
                 sha256: "wronghash".into(),

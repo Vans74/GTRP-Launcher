@@ -20,18 +20,12 @@ if [[ -d "$BASE_REPO" ]]; then BASE="$BASE_REPO"
 elif [[ -d "$BASE_TMP" ]]; then BASE="$BASE_TMP"
 else echo "ERREUR: base graphique introuvable." >&2; exit 1; fi
 
-# NOTE (v1.27.0) : ReShade (base) + Real Skybox + SkyGrad + Radar DE (ASI) +
-# Absolute Atmosphere UI (menu/polices/loadscreens HD, SANS son radar → conflit)
-# + Infernus DE (véhicule) + Vanilla + roads (retextures HD map) + OE Mod
-# (visuel océan) + SAVSR (sons véhicules) + Next Gen Weapon Sounds + sbornik-mash
-# (véhicules de service ; gyrophares AVS en attente de l'ASI). Exclus des
-# derniers : tout CLEO (.cs), le timecyc d'OE, le gta_sa.exe optionnel de SAVSR.
-# Retirés plus tôt : végétation, Real Linear Graphics, LOD
-# Vegetation (crash 0.3.DL), Project2DFX, Effects Mod (crash 0.3.DL).
+# NOTE (v1.34.1) : … + GraphicRestore.asi (SAMP Graphic Restore, requis Proper Shaders).
+# Atmosphere UI + Infernus DE + Vanilla + roads + OE Mod + Next Gen Weapon Sounds
+# + Skin véhicule 597. Real Skybox RETIRÉ (incompatible Proper Shaders).
 # Radar DE et Absolute Atmosphere UI sont fournis en DOSSIERS extraits dans
 # mods-src/ (pas en .7z) ; seul Infernus reste une archive .7z.
 REQUIRED=(
-  "Real_Skybox.7z"
   "Sky_Gradient_Fix.7z"
   "Infernus_DE.7z"
   "Next_Gen_Weapon_Sounds.7z"
@@ -78,9 +72,7 @@ cp -a "$WORK/mlx/modloader/." "$ML/"
 # 2) Improved & Fixed Original Vegetation → RETIRÉ à la demande.
 # 3) LOD Vegetation → RETIRÉ (crash SA-MP 0.3.DL).
 
-# 4) Real Skybox (EN) → modloader/ (asi + ini + textures realskybox/) --------
-echo "=== Real Skybox (EN) ==="
-cp -a "$EX/Real_Skybox/EN/Real Skybox" "$ML/"
+# 4) Real Skybox → RETIRÉ (incompatible Proper Shaders — nuages intégrés au shader).
 
 # 5) Real Linear Graphics → RETIRÉ à la demande.
 
@@ -133,15 +125,7 @@ cp -a "$OE/Water & Particles/models/." "$ML/OE Mod/"
 cp -a "$OE/Fishes/models/gta3.img/." "$ML/OE Mod/gta3.img/"
 cp -a "$OE/Seabed/modloader/gta3.img/." "$ML/OE Mod/gta3.img/"
 
-# 13) Sons véhicules (SAVSR) → modloader/ — banques GENRL (sons moteur) -------
-# std-bank de modloader charge Bank_XXX/sound_YYY.wav sans l'outil .exe.
-# EXCLUS : (Optional)/gta_sa.exe (crash possible) et (Additional sounds).
-echo "=== Sons véhicules (SAVSR / GENRL) ==="
-SV="$MODS_SRC/Sons véhicules/SAVSR/GENRL"
-[[ -d "$SV" ]] || { echo "ERREUR: 'Sons véhicules/SAVSR/GENRL' introuvable" >&2; exit 1; }
-mkdir -p "$ML/SAVSR/GENRL"
-cp -a "$SV/." "$ML/SAVSR/GENRL/"
-find "$ML/SAVSR" -iname 'desktop.ini' -delete
+# 13) Sons véhicules (SAVSR) → RETIRÉ à la demande.
 
 # 14) Next Gen Weapon Sounds → modloader/ — banques de sons d'armes ----------
 # EXCLU : "Dynamic Weapon Draw Sounds/cleo/" (CLEO non installé).
@@ -150,25 +134,51 @@ NGW="$(find "$EX/Next_Gen_Weapon_Sounds" -maxdepth 2 -type d -iname 'Next Gen We
 [[ -n "$NGW" ]] || { echo "ERREUR: dossier 'Next Gen Weapon Sounds' introuvable après extraction" >&2; exit 1; }
 cp -a "$NGW" "$ML/Next Gen Weapon Sounds"
 
-# 15) sbornik-mash → modloader/ — VÉHICULES de service (police/FBI/DOT/pompiers)
-# Remplacements de véhicules existants (dff/txd) → sûr sur 0.3.DL. Les gyrophares
-# sirens/*.json (format Advanced Vehicle Sirens) sont TENUS EN ATTENTE : ils
-# nécessitent l'ASI AVS (fourni séparément). On place le dossier sirens/ à la
-# racine du jeu SEULEMENT si l'ASI AVS est présent dans la base.
-echo "=== sbornik-mash (véhicules de service) ==="
-SB="$MODS_SRC/sbornik-mash"
-[[ -d "$SB/Cars" ]] || { echo "ERREUR: 'sbornik-mash/Cars' introuvable" >&2; exit 1; }
-mkdir -p "$ML/sbornik-mash"
-cp -a "$SB/Cars/." "$ML/sbornik-mash/"
-# Advanced Vehicle Sirens : activé uniquement si l'ASI officiel est dans la base.
-if compgen -G "$BASE"/*[Ss]iren*.asi > /dev/null || [[ -f "$BASE/AdvancedVehicleSirens.asi" ]]; then
-  echo "  -> AVS détecté : déploiement asi + sirens/"
-  cp -a "$BASE"/*[Ss]iren*.asi "$STAGING/" 2>/dev/null || true
-  [[ -f "$BASE/AdvancedVehicleSirens.asi" ]] && cp -a "$BASE/AdvancedVehicleSirens.asi" "$STAGING/"
-  cp -a "$SB/sirens" "$STAGING/sirens"
-else
-  echo "  -> AVS absent : gyrophares (sirens/*.json) NON déployés (véhicules seuls)."
-fi
+# 15) sbornik-mash → RETIRÉ à la demande (véhicules police/FBI/DOT/pompiers).
+
+# 16) Skin véhicule 597 (copcarsf / Police SFPD) → modloader/ ----------------
+# Remplacement du modèle 597 (dff + txd). Patch SA-MP : noms de frames ≤ 23
+# caractères (l'original "Declasse Premier Classic LSPD" = 29 → crash 0.3.DL).
+echo "=== Skin véhicule 597 (copcarsf) ==="
+SKIN597="$(find "$MODS_SRC" -maxdepth 1 -type d \( -iname 'skin*597*' -o -iname 'skin véhicule 597' -o -iname 'skin vehicule 597' \) | head -1)"
+[[ -n "$SKIN597" ]] || { echo "ERREUR: dossier 'Skin véhicule 597' introuvable dans mods-src" >&2; exit 1; }
+mkdir -p "$ML/Skin véhicule 597"
+mapfile -t SKIN_TXD < <(find "$SKIN597" -iname '*.txd')
+[[ -f "$SKIN597/copcarsf.dff" ]] || { echo "ERREUR: copcarsf.dff introuvable" >&2; exit 1; }
+for f in "${SKIN_TXD[@]}"; do cp -a "$f" "$ML/Skin véhicule 597/"; done
+python3 - "$SKIN597/copcarsf.dff" "$ML/Skin véhicule 597/copcarsf.dff" <<'PY'
+import struct, sys, re
+src, dst = sys.argv[1], sys.argv[2]
+data = bytearray(open(src,'rb').read())
+old = b"Declasse Premier Classic LSPD"
+new = b"Premier_LSPD"
+idx = data.find(old)
+if idx == -1:
+    open(dst,'wb').write(data)
+    sys.exit(0)
+length_at = idx - 8
+struct.pack_into('<I', data, length_at, len(new))
+data[idx:idx+len(old)] = new
+if re.search(rb'[\x20-\x7e]{24,}', bytes(data)):
+    raise SystemExit('ERREUR: noms de frames >23 chars restants dans copcarsf.dff')
+open(dst,'wb').write(data)
+print(f"  -> copcarsf.dff patché ({old.decode()} → {new.decode()})")
+PY
+echo "  -> $(( ${#SKIN_TXD[@]} + 1 )) fichier(s) véhicule 597"
+
+# 17) Proper Shaders → modloader/Proper Shaders/ (preset medium par défaut) ---
+# Incompatible avec Real Skybox (retiré). ReShade : reverse Z activé dans ReShade.ini.
+# SAMPGraphicRestore.asi (nom EXACT requis par ProperShaders) livré via la base.
+echo "=== Proper Shaders ==="
+PS_SRC="$MODS_SRC/Shaders/Proper Shaders"
+PS_PRESET="$MODS_SRC/Shaders/(presets)/(3a- medium - DEFAULT)/ProperShaders.ini"
+[[ -d "$PS_SRC" ]] || { echo "ERREUR: 'Shaders/Proper Shaders' introuvable dans mods-src" >&2; exit 1; }
+[[ -f "$PS_PRESET" ]] || { echo "ERREUR: preset Proper Shaders (3a medium) introuvable" >&2; exit 1; }
+cp -a "$PS_SRC" "$ML/Proper Shaders"
+cp -f "$PS_PRESET" "$ML/Proper Shaders/ProperShaders.ini"
+# ProperFixes (extras) : supprime l'avertissement SkyGfx, compatible Proper Shaders.
+PF="$MODS_SRC/Shaders/(extras)/(fix proper fixes warning)/Proper Fixes/ProperFixes.asi"
+[[ -f "$PF" ]] && cp -f "$PF" "$STAGING/"
 
 # --- Rapport de contrôle ----------------------------------------------------
 REPORT="$ROOT/modpack-work/build-report.txt"
@@ -213,22 +223,67 @@ rm -f "$OUT"
 SIZE=$(stat -c %s "$OUT"); SHA=$(sha256sum "$OUT" | awk '{print $1}')
 echo "version=$VERSION size=$SIZE sha256=$SHA"
 
-cat > "$ROOT/modpack-work/manifest.json" <<EOF
-{
-  "version": "$VERSION",
-  "base_url": "https://github.com/Vans74/GTRP-Launcher/releases/download/modpack",
-  "bundle": {
-    "url": "https://github.com/Vans74/GTRP-Launcher/releases/download/modpack/gtrp-modpack-$VERSION.zip",
-    "sha256": "$SHA",
-    "size": $SIZE
-  },
-  "files": [],
-  "forbidden": []
+# --- Fichiers "config" différentiels ----------------------------------------
+# Ces petits fichiers texte (réglages ReShade) sont référencés individuellement
+# dans "files". Le launcher compare leur SHA-256 local et ne re-télécharge QUE
+# ceux qui ont changé, SANS reprendre le bundle complet — à condition de ne pas
+# changer "version" (sinon le bundle prime). Chaque asset est nommé par son hash
+# (ex. ReShadePreset.<sha8>.ini) pour éviter tout cache CDN périmé au download.
+BASE_PUB_URL="https://github.com/Vans74/GTRP-Launcher/releases/download/modpack"
+CFG_FILES=("ReShade.ini" "ReShadePreset.ini")
+
+# Nettoie les anciennes copies d'assets config avant régénération.
+rm -f "$ROOT"/modpack-work/ReShade.*.ini "$ROOT"/modpack-work/ReShadePreset.*.ini 2>/dev/null || true
+
+CFG_SPECS=()   # "path_in_game|asset_name" pour l'étape d'upload
+for cf in "${CFG_FILES[@]}"; do
+  src="$STAGING/$cf"
+  [[ -f "$src" ]] || { echo "ERREUR: config $cf absente du staging" >&2; exit 1; }
+  csha=$(sha256sum "$src" | awk '{print $1}')
+  cext="${cf##*.}"; cbase="${cf%.*}"
+  asset="${cbase}.${csha:0:8}.${cext}"
+  cp -f "$src" "$ROOT/modpack-work/$asset"
+  CFG_SPECS+=("gtrp-assets/enb/$cf|$asset")
+done
+
+VERSION="$VERSION" SHA="$SHA" SIZE="$SIZE" BASE_PUB_URL="$BASE_PUB_URL" STAGING="$STAGING" \
+CFG_SPECS="${CFG_SPECS[*]}" python3 - "$ROOT/modpack-work/manifest.json" <<'PY'
+import os, sys, json, hashlib
+out = sys.argv[1]
+base = os.environ["BASE_PUB_URL"]
+staging = os.environ["STAGING"]
+files = []
+for spec in os.environ["CFG_SPECS"].split():
+    path_in_game, asset = spec.split("|")
+    local = os.path.join(staging, path_in_game.split("gtrp-assets/enb/", 1)[1])
+    data = open(local, "rb").read()
+    files.append({
+        "path": path_in_game,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size": len(data),
+        "url": f"{base}/{asset}",
+    })
+manifest = {
+    "version": os.environ["VERSION"],
+    "base_url": base,
+    "bundle": {
+        "url": f'{base}/gtrp-modpack-{os.environ["VERSION"]}.zip',
+        "sha256": os.environ["SHA"],
+        "size": int(os.environ["SIZE"]),
+    },
+    "bundle_required": True,
+    "files": files,
+    "forbidden": [],
 }
-EOF
+json.dump(manifest, open(out, "w"), indent=2, ensure_ascii=False)
+print("manifest écrit avec", len(files), "fichier(s) config différentiel(s)")
+PY
 
 echo ""
 echo "=== TERMINÉ (rien publié) ==="
 echo "Zip      : $OUT"
 echo "Manifest : $ROOT/modpack-work/manifest.json"
 echo "Rapport  : $REPORT"
+echo ""
+echo "Assets config à uploader (en plus du bundle + manifest) :"
+for spec in "${CFG_SPECS[@]}"; do echo "  ${spec#*|}"; done
