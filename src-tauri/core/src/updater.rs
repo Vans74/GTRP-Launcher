@@ -123,10 +123,29 @@ fn resolve_url(base_url: &str, file: &ManifestFile) -> String {
     format!("{base}/{}", file.path.trim_start_matches('/'))
 }
 
-/// Télécharge et parse le manifest distant.
+/// Ajoute un paramètre anti-cache unique à une URL.
+///
+/// Les assets de release GitHub sont servis via un CDN qui met en cache la
+/// réponse pour une URL donnée. Après un ré-upload du manifest/news (même URL),
+/// le CDN peut servir l'ancienne version pendant plusieurs minutes. En variant
+/// la query string à chaque requête, on force un cache-miss côté CDN et on
+/// obtient toujours la version fraîche — indispensable pour que le launcher
+/// détecte une mise à jour sans être redémarré.
+pub fn cache_busted(url: &str) -> String {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let sep = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{sep}_={nonce}")
+}
+
+/// Télécharge et parse le manifest distant (sans cache CDN).
 pub fn fetch_manifest(url: &str) -> Result<Manifest> {
-    let resp = ureq::get(url)
+    let resp = ureq::get(&cache_busted(url))
         .timeout(std::time::Duration::from_secs(15))
+        .set("Cache-Control", "no-cache")
+        .set("Pragma", "no-cache")
         .call()
         .map_err(|e| LauncherError::Network(format!("manifest : {e}")))?;
     let text = resp

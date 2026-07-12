@@ -13,3 +13,7 @@ src-tauri/gen/schemas/
 *.log
 modpack-work/
 *.rar
+
+# Archives sources des mods (trop lourdes pour git ; le README reste suivi)
+mods-src/*.7z
+mods-src/*.zip

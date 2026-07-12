@@ -25,8 +25,12 @@ pub struct NewsFeed {
 /// Récupère le flux de news. En cas d'erreur réseau, renvoie un flux vide plutôt
 /// que de bloquer l'affichage du launcher.
 pub fn fetch_news(url: &str) -> Result<NewsFeed> {
-    let resp = ureq::get(url)
+    // Anti-cache CDN (cf. updater::cache_busted) : sans ça, les news ré-uploadées
+    // restent invisibles tant que le cache GitHub n'a pas expiré.
+    let resp = ureq::get(&crate::updater::cache_busted(url))
         .timeout(std::time::Duration::from_secs(10))
+        .set("Cache-Control", "no-cache")
+        .set("Pragma", "no-cache")
         .call()
         .map_err(|e| LauncherError::Network(format!("news : {e}")))?;
     let text = resp
