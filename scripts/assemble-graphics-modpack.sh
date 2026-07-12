@@ -20,10 +20,10 @@ if [[ -d "$BASE_REPO" ]]; then BASE="$BASE_REPO"
 elif [[ -d "$BASE_TMP" ]]; then BASE="$BASE_TMP"
 else echo "ERREUR: base graphique introuvable." >&2; exit 1; fi
 
-# NOTE (v1.35.0) : Proper Shaders TEMPORAIREMENT DÉSACTIVÉ (test freezes).
-# SAMPGraphicRestore.asi retiré de la base (requis uniquement par Proper Shaders).
-# Atmosphere UI + Infernus DE + Vanilla + roads + OE Mod + Next Gen Weapon Sounds
-# + Skin véhicule 597. Real Skybox RETIRÉ (incompatible Proper Shaders).
+# NOTE (v1.36.0) : Proper Shaders réactivé. Skin véhicule 597 RETIRÉ (freezes).
+# SAMPGraphicRestore.asi (nom exact requis par Proper Shaders) dans la base.
+# Atmosphere UI + Infernus DE + Vanilla + roads + OE Mod + Next Gen Weapon Sounds.
+# Real Skybox RETIRÉ (incompatible Proper Shaders).
 # Radar DE et Absolute Atmosphere UI sont fournis en DOSSIERS extraits dans
 # mods-src/ (pas en .7z) ; seul Infernus reste une archive .7z.
 REQUIRED=(
@@ -137,47 +137,22 @@ cp -a "$NGW" "$ML/Next Gen Weapon Sounds"
 
 # 15) sbornik-mash → RETIRÉ à la demande (véhicules police/FBI/DOT/pompiers).
 
-# 16) Skin véhicule 597 (copcarsf / Police SFPD) → modloader/ ----------------
-# Remplacement du modèle 597 (dff + txd). Patch SA-MP : noms de frames ≤ 23
-# caractères (l'original "Declasse Premier Classic LSPD" = 29 → crash 0.3.DL).
-echo "=== Skin véhicule 597 (copcarsf) ==="
-SKIN597="$(find "$MODS_SRC" -maxdepth 1 -type d \( -iname 'skin*597*' -o -iname 'skin véhicule 597' -o -iname 'skin vehicule 597' \) | head -1)"
-[[ -n "$SKIN597" ]] || { echo "ERREUR: dossier 'Skin véhicule 597' introuvable dans mods-src" >&2; exit 1; }
-mkdir -p "$ML/Skin véhicule 597"
-mapfile -t SKIN_TXD < <(find "$SKIN597" -iname '*.txd')
-[[ -f "$SKIN597/copcarsf.dff" ]] || { echo "ERREUR: copcarsf.dff introuvable" >&2; exit 1; }
-for f in "${SKIN_TXD[@]}"; do cp -a "$f" "$ML/Skin véhicule 597/"; done
-python3 - "$SKIN597/copcarsf.dff" "$ML/Skin véhicule 597/copcarsf.dff" <<'PY'
-import struct, sys, re
-src, dst = sys.argv[1], sys.argv[2]
-data = bytearray(open(src,'rb').read())
-old = b"Declasse Premier Classic LSPD"
-new = b"Premier_LSPD"
-idx = data.find(old)
-if idx == -1:
-    open(dst,'wb').write(data)
-    sys.exit(0)
-length_at = idx - 8
-struct.pack_into('<I', data, length_at, len(new))
-data[idx:idx+len(old)] = new
-if re.search(rb'[\x20-\x7e]{24,}', bytes(data)):
-    raise SystemExit('ERREUR: noms de frames >23 chars restants dans copcarsf.dff')
-open(dst,'wb').write(data)
-print(f"  -> copcarsf.dff patché ({old.decode()} → {new.decode()})")
-PY
-echo "  -> $(( ${#SKIN_TXD[@]} + 1 )) fichier(s) véhicule 597"
+# 16) Skin véhicule 597 (copcarsf) → RETIRÉ (freezes en jeu).
+# echo "=== Skin véhicule 597 (copcarsf) ==="
+# ...
 
-# 17) Proper Shaders → DÉSACTIVÉ (test freezes — réactiver section si innocent).
-# echo "=== Proper Shaders ==="
-# PS_SRC="$MODS_SRC/Shaders/Proper Shaders"
-# PS_PRESET="$MODS_SRC/Shaders/(presets)/(3a- medium - DEFAULT)/ProperShaders.ini"
-# [[ -d "$PS_SRC" ]] || { echo "ERREUR: 'Shaders/Proper Shaders' introuvable dans mods-src" >&2; exit 1; }
-# [[ -f "$PS_PRESET" ]] || { echo "ERREUR: preset Proper Shaders (3a medium) introuvable" >&2; exit 1; }
-# cp -a "$PS_SRC" "$ML/Proper Shaders"
-# cp -f "$PS_PRESET" "$ML/Proper Shaders/ProperShaders.ini"
-# PF="$MODS_SRC/Shaders/(extras)/(fix proper fixes warning)/Proper Fixes/ProperFixes.asi"
-# [[ -f "$PF" ]] && cp -f "$PF" "$STAGING/"
-echo "=== Proper Shaders : DÉSACTIVÉ (test freezes) ==="
+# 17) Proper Shaders → modloader/Proper Shaders/ (preset medium par défaut) ---
+# Incompatible avec Real Skybox (retiré). ReShade : reverse Z activé dans ReShade.ini.
+# SAMPGraphicRestore.asi (nom EXACT requis par ProperShaders) livré via la base.
+echo "=== Proper Shaders ==="
+PS_SRC="$MODS_SRC/Shaders/Proper Shaders"
+PS_PRESET="$MODS_SRC/Shaders/(presets)/(3a- medium - DEFAULT)/ProperShaders.ini"
+[[ -d "$PS_SRC" ]] || { echo "ERREUR: 'Shaders/Proper Shaders' introuvable dans mods-src" >&2; exit 1; }
+[[ -f "$PS_PRESET" ]] || { echo "ERREUR: preset Proper Shaders (3a medium) introuvable" >&2; exit 1; }
+cp -a "$PS_SRC" "$ML/Proper Shaders"
+cp -f "$PS_PRESET" "$ML/Proper Shaders/ProperShaders.ini"
+PF="$MODS_SRC/Shaders/(extras)/(fix proper fixes warning)/Proper Fixes/ProperFixes.asi"
+[[ -f "$PF" ]] && cp -f "$PF" "$STAGING/"
 
 # --- Rapport de contrôle ----------------------------------------------------
 REPORT="$ROOT/modpack-work/build-report.txt"
