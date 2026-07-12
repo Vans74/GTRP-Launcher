@@ -20,7 +20,7 @@ if [[ -d "$BASE_REPO" ]]; then BASE="$BASE_REPO"
 elif [[ -d "$BASE_TMP" ]]; then BASE="$BASE_TMP"
 else echo "ERREUR: base graphique introuvable." >&2; exit 1; fi
 
-# NOTE (v1.37.0) : Project2DFX (SALodLights) réintégré, LoadAllBinaryIPLs=0.
+# NOTE (v1.38.0) : Project2DFX (SALodLights) RETIRÉ (erreur ASI Loader 126).
 # Proper Shaders + SAMPGraphicRestore. Skin véhicule 597 RETIRÉ (freezes).
 # Atmosphere UI + Infernus DE + Vanilla + roads + OE Mod + Next Gen Weapon Sounds.
 # Real Skybox RETIRÉ (incompatible Proper Shaders).
@@ -48,13 +48,9 @@ echo "=== Staging ==="
 rm -rf "$WORK"
 mkdir -p "$ML"
 cp -a "$BASE/." "$STAGING/"
-# Project2DFX (SALodLights) : coronas LOD + draw distance. LoadAllBinaryIPLs=0
-# pour éviter les crashs SA-MP 0.3.DL (ne force pas le chargement de tous les IPL).
-for crit in SALodLights.asi SALodLights.dat SALodLights.ini; do
-  [[ -f "$STAGING/$crit" ]] || { echo "ERREUR: Project2DFX ($crit) absent de la base" >&2; exit 1; }
-done
-sed -i 's/^LoadAllBinaryIPLs *= *1/LoadAllBinaryIPLs = 0/' "$STAGING/SALodLights.ini"
-echo "=== Project2DFX (SALodLights) : actif, LoadAllBinaryIPLs=0 ==="
+# Project2DFX (SALodLights) retiré : on purge ses fichiers de la base.
+rm -f "$STAGING"/SALodLights.asi "$STAGING"/SALodLights.dat "$STAGING"/SALodLights.ini
+echo "=== Project2DFX (SALodLights) : retiré ==="
 
 EX="$WORK/extract"; mkdir -p "$EX"
 x7z() { mkdir -p "$EX/$1"; 7z x -y -o"$EX/$1" "$MODS_SRC/$1.7z" >/dev/null; }
