@@ -424,7 +424,10 @@ input {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 8px;
+  /* Écart suffisant pour que le texte de progression (positionné sous la barre,
+     top: 12px) ne chevauche pas le bouton. La barre étant masquée hors mise à
+     jour, cet écart ne s'applique qu'aux deux éléments visibles simultanément. */
+  gap: 24px;
 }
 .progress {
   position: relative;

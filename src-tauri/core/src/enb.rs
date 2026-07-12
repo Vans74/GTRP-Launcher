@@ -1,9 +1,19 @@
-//! Gestion de l'ENB GTRP (SA_DirectX 2.0 par XMakarusX, base ENBSeries 0.313).
+//! Gestion des graphismes améliorés GTRP (ReShade + mods via modloader/ASI).
 //!
-//! Les fichiers ENB sont stockés dans `{gta_root}/gtrp-assets/enb/` (déployés via le
+//! Les fichiers sont stockés dans `{gta_root}/gtrp-assets/enb/` (déployés via le
 //! modpack du launcher). Avant chaque lancement :
 //!   - graphismes activés  → copie récursive vers la racine du jeu ;
 //!   - graphismes désactivés → retrait des fichiers précédemment déployés.
+//!
+//! Cas particulier de l'ASI loader (Ultimate ASI Loader) : sur GTA SA / SA-MP
+//! 0.3.DL, les `.asi` (modloader, radar, skygrad, Real Skybox…) ne se chargent de
+//! façon fiable que via un proxy `vorbisFile.dll`, PAS via `dinput8.dll`. Le
+//! modpack livre donc le loader sous un nom neutre (`vorbisFileLoader.dll`) et le
+//! launcher l'installe lui-même en `vorbisFile.dll`, en sauvegardant le
+//! `vorbisFile.dll` d'origine du jeu en `vorbisFileHooked.dll` (vers lequel le
+//! loader relaie les appels audio OGG). Ainsi chaque joueur obtient les ASI sans
+//! aucune manipulation manuelle. Le nom neutre évite qu'un ancien launcher (sans
+//! cette logique) n'écrase le `vorbisFile.dll` d'origine lors d'une simple copie.
 
 use crate::error::{LauncherError, Result};
 use serde::Serialize;
@@ -15,6 +25,17 @@ pub const ENB_STAGING_REL: &str = "gtrp-assets/enb";
 
 /// Fichier témoin : indique que l'ENB GTRP est actuellement actif dans le dossier du jeu.
 pub const ENB_MARKER: &str = ".gtrp_enb_active";
+
+/// Nom neutre sous lequel le modpack livre l'Ultimate ASI Loader (non chargé
+/// automatiquement par le jeu ; c'est le launcher qui l'installe).
+pub const LOADER_SRC_NAME: &str = "vorbisFileLoader.dll";
+
+/// Nom sous lequel le loader doit être installé pour charger les ASI de façon
+/// fiable sur GTA SA / SA-MP 0.3.DL.
+pub const LOADER_TARGET_NAME: &str = "vorbisFile.dll";
+
+/// Sauvegarde du `vorbisFile.dll` d'origine du jeu (le loader y relaie l'audio OGG).
+pub const LOADER_BACKUP_NAME: &str = "vorbisFileHooked.dll";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EnbPrepareResult {
@@ -63,12 +84,71 @@ fn activate(gta_root: &Path) -> Result<EnbPrepareResult> {
     let _ = deactivate(gta_root);
 
     copy_dir_recursive(&staging, gta_root, &staging)?;
+
+    // Installe l'ASI loader en vorbisFile.dll (avec sauvegarde de l'original)
+    // pour que modloader et les autres .asi se chargent chez tous les joueurs.
+    install_asi_loader(gta_root, &staging)?;
+
     fs::write(gta_root.join(ENB_MARKER), b"1")?;
 
     Ok(EnbPrepareResult {
         applied: true,
-        message: "Graphismes améliorés (ENB) activés.".into(),
+        message: "Graphismes améliorés activés.".into(),
     })
+}
+
+/// Compare deux fichiers octet par octet (taille puis contenu).
+fn files_equal(a: &Path, b: &Path) -> bool {
+    match (fs::metadata(a), fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) if ma.len() == mb.len() => match (fs::read(a), fs::read(b)) {
+            (Ok(da), Ok(db)) => da == db,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Installe l'Ultimate ASI Loader en `vorbisFile.dll`, en préservant le
+/// `vorbisFile.dll` d'origine du jeu sous `vorbisFileHooked.dll`.
+fn install_asi_loader(gta_root: &Path, staging: &Path) -> Result<()> {
+    let src = staging.join(LOADER_SRC_NAME);
+    if !src.is_file() {
+        // Le modpack ne fournit pas de loader : rien à faire.
+        return Ok(());
+    }
+
+    let target = gta_root.join(LOADER_TARGET_NAME);
+    let backup = gta_root.join(LOADER_BACKUP_NAME);
+
+    // Sauvegarde unique du vorbisFile.dll d'origine (jamais écraser une sauvegarde
+    // existante, et ne pas sauvegarder notre propre loader).
+    if !backup.exists() && target.is_file() && !files_equal(&target, &src) {
+        fs::rename(&target, &backup)?;
+    }
+
+    fs::copy(&src, &target)?;
+    Ok(())
+}
+
+/// Retire notre ASI loader et restaure le `vorbisFile.dll` d'origine du jeu.
+fn uninstall_asi_loader(gta_root: &Path, staging: &Path) {
+    let src = staging.join(LOADER_SRC_NAME);
+    let target = gta_root.join(LOADER_TARGET_NAME);
+    let backup = gta_root.join(LOADER_BACKUP_NAME);
+
+    // Ne supprime vorbisFile.dll que si c'est bien notre loader (ou si une
+    // sauvegarde de l'original existe, prête à être restaurée).
+    if target.is_file() {
+        let is_ours = src.is_file() && files_equal(&target, &src);
+        if is_ours || backup.is_file() {
+            let _ = fs::remove_file(&target);
+        }
+    }
+
+    // Restaure l'original s'il avait été sauvegardé.
+    if backup.is_file() && !target.exists() {
+        let _ = fs::rename(&backup, &target);
+    }
 }
 
 /// Retire proprement un déploiement ENB précédent du dossier du jeu.
@@ -87,6 +167,8 @@ fn deactivate(gta_root: &Path) -> Result<()> {
     let staging = staging_dir(gta_root);
     if staging.is_dir() {
         remove_staged_files(&staging, gta_root, &staging)?;
+        // Restaure le vorbisFile.dll d'origine (retire notre loader).
+        uninstall_asi_loader(gta_root, &staging);
     }
 
     let _ = fs::remove_file(marker);
@@ -179,6 +261,50 @@ mod tests {
         let game = tmp("nopack");
         let r = prepare(&game, true).unwrap();
         assert!(!r.applied);
+        let _ = fs::remove_dir_all(&game);
+    }
+
+    #[test]
+    fn asi_loader_backup_and_restore_roundtrip() {
+        let game = tmp("loader");
+        let staging = staging_dir(&game);
+        fs::create_dir_all(&staging).unwrap();
+        // Loader livré par le modpack (nom neutre) + un fichier ENB quelconque.
+        fs::write(staging.join(LOADER_SRC_NAME), b"ULTIMATE-ASI-LOADER").unwrap();
+        fs::write(staging.join("d3d9.dll"), b"reshade").unwrap();
+        // vorbisFile.dll d'origine du jeu (contenu différent du loader).
+        fs::write(game.join(LOADER_TARGET_NAME), b"ORIGINAL-VORBIS-AUDIO").unwrap();
+
+        // Activation : l'original est sauvegardé, le loader prend sa place.
+        let r = prepare(&game, true).unwrap();
+        assert!(r.applied);
+        assert!(game.join(LOADER_BACKUP_NAME).is_file());
+        assert_eq!(
+            fs::read(game.join(LOADER_TARGET_NAME)).unwrap(),
+            b"ULTIMATE-ASI-LOADER"
+        );
+        assert_eq!(
+            fs::read(game.join(LOADER_BACKUP_NAME)).unwrap(),
+            b"ORIGINAL-VORBIS-AUDIO"
+        );
+
+        // Ré-activation : ne doit PAS sauvegarder le loader par-dessus la sauvegarde.
+        let r2 = prepare(&game, true).unwrap();
+        assert!(r2.applied);
+        assert_eq!(
+            fs::read(game.join(LOADER_BACKUP_NAME)).unwrap(),
+            b"ORIGINAL-VORBIS-AUDIO"
+        );
+
+        // Désactivation : l'original est restauré, le loader retiré.
+        let r3 = prepare(&game, false).unwrap();
+        assert!(!r3.applied);
+        assert!(!game.join(LOADER_BACKUP_NAME).exists());
+        assert_eq!(
+            fs::read(game.join(LOADER_TARGET_NAME)).unwrap(),
+            b"ORIGINAL-VORBIS-AUDIO"
+        );
+
         let _ = fs::remove_dir_all(&game);
     }
 }
