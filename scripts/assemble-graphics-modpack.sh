@@ -20,8 +20,8 @@ if [[ -d "$BASE_REPO" ]]; then BASE="$BASE_REPO"
 elif [[ -d "$BASE_TMP" ]]; then BASE="$BASE_TMP"
 else echo "ERREUR: base graphique introuvable." >&2; exit 1; fi
 
-# NOTE (v1.38.0) : Project2DFX (SALodLights) RETIRÉ (erreur ASI Loader 126).
-# Proper Shaders + SAMPGraphicRestore. Skin véhicule 597 RETIRÉ (freezes).
+# NOTE (v1.39.0) : Vapid Stanier Police LED (copcarsf / véhicule 597 Police SF).
+# Project2DFX retiré. Proper Shaders + SAMPGraphicRestore.
 # Atmosphere UI + Infernus DE + Vanilla + roads + OE Mod + Next Gen Weapon Sounds.
 # Real Skybox RETIRÉ (incompatible Proper Shaders).
 # Radar DE et Absolute Atmosphere UI sont fournis en DOSSIERS extraits dans
@@ -138,9 +138,42 @@ cp -a "$NGW" "$ML/Next Gen Weapon Sounds"
 
 # 15) sbornik-mash → RETIRÉ à la demande (véhicules police/FBI/DOT/pompiers).
 
-# 16) Skin véhicule 597 (copcarsf) → RETIRÉ (freezes en jeu).
-# echo "=== Skin véhicule 597 (copcarsf) ==="
-# ...
+# 16) Vapid Stanier Police Cruiser LED (copcarsf / Police SF, id 597) ---------
+# Source : https://www.gtaall.com/gta-san-andreas/cars/205991-vapid-stanier-police-cruiser-led-lights.html
+# Remplace le modèle 597. Patch SA-MP : noms de frames >23 caractères → crash 0.3.DL.
+echo "=== Vapid Stanier Police LED (copcarsf) ==="
+VS_SRC="$(find "$MODS_SRC" -maxdepth 1 -type d \( -iname 'vapid*stanier*police*led*' -o -iname 'vapid stanier police led' \) | head -1)"
+[[ -n "$VS_SRC" ]] || { echo "ERREUR: dossier 'Vapid Stanier Police LED' introuvable dans mods-src" >&2; exit 1; }
+[[ -f "$VS_SRC/copcarsf.dff" && -f "$VS_SRC/copcarsf.txd" ]] || { echo "ERREUR: copcarsf.dff/txd introuvable dans $VS_SRC" >&2; exit 1; }
+mkdir -p "$ML/Vapid Stanier Police LED"
+python3 - "$VS_SRC/copcarsf.dff" "$ML/Vapid Stanier Police LED/copcarsf.dff" <<'PY'
+import struct, sys, re
+src, dst = sys.argv[1], sys.argv[2]
+data = bytearray(open(src,'rb').read())
+patched = 0
+for m in re.finditer(rb'[\x20-\x7e]{24,}', bytes(data)):
+    s = m.group()
+    # Noms de frames lisibles (espaces, pas de chemins matériaux type vehicle_generic_*).
+    if b' ' not in s or b'_' in s:
+        continue
+    new = s[:23]
+    if new == s:
+        continue
+    start = m.start()
+    # Champ longueur GTA string juste avant le texte (4 octets LE).
+    if start >= 4:
+        struct.pack_into('<I', data, start - 4, len(new))
+    data[start:start+len(s)] = new + b'\x00' * (len(s) - len(new))
+    patched += 1
+    print(f"  -> frame raccourci ({len(s)}→{len(new)}): {s.decode()} → {new.decode()}")
+if any(b' ' in m.group() and b'_' not in m.group()
+       for m in re.finditer(rb'[\x20-\x7e]{24,}', bytes(data))):
+    raise SystemExit('ERREUR: noms de frames >23 chars restants dans copcarsf.dff')
+open(dst,'wb').write(data)
+print(f"  -> copcarsf.dff OK ({patched} frame(s) patché(s))")
+PY
+cp -f "$VS_SRC/copcarsf.txd" "$ML/Vapid Stanier Police LED/"
+echo "  -> copcarsf.txd ($(du -h "$VS_SRC/copcarsf.txd" | awk '{print $1}'))"
 
 # 17) Proper Shaders → modloader/Proper Shaders/ (preset medium par défaut) ---
 # Incompatible avec Real Skybox (retiré). ReShade : reverse Z activé dans ReShade.ini.
