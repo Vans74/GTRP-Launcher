@@ -10,6 +10,8 @@ légère (~5–10 Mo) et aux couleurs du serveur.
 - **Statut serveur en direct** (en ligne/hors ligne, joueurs, ping) via le protocole query SA-MP.
 - **Auto-updater du modpack** : téléchargement différentiel basé sur un `manifest.json`
   distant, avec vérification d'intégrité **SHA-256** et installation atomique.
+- **Préchargement artwork SA-MP** : synchronisation des DFF/TXD déclarés par le
+  serveur dans le cache 0.3.DL (CRC + SHA-256, bundle initial puis différentiel).
 - **Vérification d'intégrité / anti-triche léger** : contrôle des fichiers attendus
   et détection de fichiers interdits (`*.asi`, `cleo/*`, …).
 - **Actualités / changelog** intégrés (`news.json` distant) et liens Discord / site.
@@ -46,7 +48,7 @@ launcher/
 ├─ src-tauri/
 │  ├─ src/lib.rs               # Couche Tauri : commandes exposées au frontend
 │  └─ core/                    # Crate "gtrp-core" : logique métier (SANS GUI, testable partout)
-│     └─ src/{query,updater,gta,launch,settings,news,config,error}.rs
+│     └─ src/{query,updater,samp_cache,gta,launch,settings,news,config,error}.rs
 ├─ tools/gen-manifest.mjs      # Générateur de manifest du modpack
 └─ .github/workflows/build.yml # CI : build de l'installeur Windows
 ```
@@ -118,6 +120,9 @@ Le build se fait via **GitHub Actions** :
 
 - Le lancement du jeu écrit `PlayerName` et `gta_sa_exe` dans `HKCU\Software\SAMP`
   puis démarre `samp.exe <host>:<port>` (méthode standard SA-MP, sans injection de DLL).
+- Le cache artwork est écrit dans le dossier Documents résolu par Windows, y compris
+  lorsque celui-ci est redirigé vers OneDrive. Le téléchargement natif SA-MP reste
+  disponible si le catalogue HTTPS est momentanément inaccessible.
 - Le décodage des chaînes du serveur est tolérant (Latin-1) pour éviter tout souci d'accents.
 - Les téléchargements sont vérifiés par SHA-256 ; un chemin de manifest malveillant
   (`..`, chemin absolu) est refusé.

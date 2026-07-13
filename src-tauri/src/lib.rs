@@ -6,7 +6,7 @@
 
 use gtrp_core::config;
 use gtrp_core::error::{LauncherError, Result};
-use gtrp_core::{enb, gta, launch, news, query, settings, updater};
+use gtrp_core::{enb, gta, launch, news, query, samp_cache, settings, updater};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -149,6 +149,25 @@ async fn apply_updates(app: AppHandle) -> Result<()> {
     .map_err(|e| LauncherError::Other(format!("tâche interrompue : {e}")))?
 }
 
+/// Synchronise l'intégralité du catalogue artwork dans le cache natif SA-MP.
+/// Le dossier Documents est résolu par l'API Windows/Tauri afin de respecter
+/// OneDrive et les redirections de profil.
+#[tauri::command]
+async fn sync_samp_cache(app: AppHandle) -> Result<samp_cache::CacheSyncResult> {
+    let documents = app
+        .path()
+        .document_dir()
+        .map_err(|e| LauncherError::Config(format!("dossier Documents introuvable : {e}")))?;
+    let app_for_events = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        samp_cache::sync_cache(&documents, |progress| {
+            let _ = app_for_events.emit("update-progress", &progress);
+        })
+    })
+    .await
+    .map_err(|e| LauncherError::Other(format!("tâche cache interrompue : {e}")))?
+}
+
 #[tauri::command]
 async fn verify_integrity(app: AppHandle) -> Result<updater::IntegrityReport> {
     let install = resolve_install(&app)?;
@@ -197,6 +216,7 @@ pub fn run() {
             launch_game,
             check_updates,
             apply_updates,
+            sync_samp_cache,
             verify_integrity,
             get_news,
         ])

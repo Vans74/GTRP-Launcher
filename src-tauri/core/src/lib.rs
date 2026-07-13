@@ -11,6 +11,7 @@ pub mod laa;
 pub mod launch;
 pub mod news;
 pub mod query;
+pub mod samp_cache;
 pub mod settings;
 pub mod updater;
 

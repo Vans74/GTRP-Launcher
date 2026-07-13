@@ -267,7 +267,40 @@ async function runUpdatesThenLaunch() {
     state.updating = false;
     updatePlayButton();
   }
+
+  // Précharge tous les modèles/textures déclarés par le serveur dans le cache
+  // natif SA-MP. En cas d'indisponibilité du CDN, SA-MP conserve son propre
+  // téléchargement à la connexion comme filet de sécurité.
+  await preloadSampCache();
   await launch();
+}
+
+async function preloadSampCache() {
+  state.updating = true;
+  updatePlayButton();
+  try {
+    const result = await call("sync_samp_cache");
+    el("progress").hidden = true;
+    if (result.downloaded_files > 0) {
+      const mib = (result.bytes_downloaded / 1024 / 1024).toFixed(1);
+      toast(
+        `Cache SA-MP prêt : ${result.downloaded_files} fichier(s) ajouté(s), ${mib} Mio.`,
+        "success",
+        7000,
+      );
+    }
+  } catch (e) {
+    el("progress").hidden = true;
+    console.warn("sync_samp_cache:", e);
+    toast(
+      `Préchargement du cache indisponible — SA-MP prendra le relais : ${e}`,
+      "info",
+      9000,
+    );
+  } finally {
+    state.updating = false;
+    updatePlayButton();
+  }
 }
 
 async function launch() {

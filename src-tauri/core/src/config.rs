@@ -31,6 +31,15 @@ pub const DISCORD_URL: &str = "https://discord.gg/gtrp";
 pub const ASSET_BASE_URL: &str =
     "https://github.com/Vans74/GTRP-Launcher/releases/download/modpack";
 
+/// Catalogue dynamique de tous les DFF/TXD déclarés dans models/artconfig.txt.
+/// Il est régénéré atomiquement à chaque démarrage du serveur SA-MP.
+pub const ARTWORK_MANIFEST_URL: &str =
+    "https://afterhours-nsfw.fr/static/gtrp-artwork/manifest.json";
+pub const ARTWORK_FILES_BASE_URL: &str =
+    "https://afterhours-nsfw.fr/static/gtrp-artwork/files";
+pub const ARTWORK_BUNDLES_BASE_URL: &str =
+    "https://afterhours-nsfw.fr/static/gtrp-artwork/bundles";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PublicConfig {
     pub server_name: String,
