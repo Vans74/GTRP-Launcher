@@ -1,0 +1,23 @@
+{
+  "name": "ENBSeries 0.430 officiel (WrapperVersion)",
+  "url": "http://enbdev.com/enbseries_gtasa_v0430.zip",
+  "sha256": "2521eec0532d1b38f7d9eb0cdd1c45cb9f6d39f9fef1e63774a822e0d0cc1c83",
+  "cache_key": "enbseries-official-v0430-wrapper",
+  "archive_prefix": "WrapperVersion/",
+  "destination": "",
+  "include": [
+    "d3d9.dll",
+    "enbseries/",
+    "enbbloom.fx",
+    "enbdepthoffield.fx",
+    "enbeffect.fx",
+    "enbeffectprepass.fx",
+    "enbenvmap.fx",
+    "enblens.fx",
+    "enblighting.fx",
+    "enbsky.fx",
+    "enbunderwater.fx",
+    "enbvehicle.fx",
+    "enbwater.fx"
+  ]
+}

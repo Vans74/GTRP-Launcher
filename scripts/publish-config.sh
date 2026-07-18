@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Publie UNIQUEMENT les fichiers de config ReShade en différentiel, sans
+# Publie UNIQUEMENT les fichiers de config ENB en différentiel, sans
 # reconstruire ni ré-uploader le bundle complet (320 Mo).
 #
 # Principe : ces petits fichiers sont référencés dans "files" du manifeste. Le
 # launcher compare leur SHA-256 local et ne télécharge QUE ceux qui ont changé.
 # Sans changement de version, aucun bundle. Pour un patch avec bump de version,
 # utiliser publish-patch.sh (bundle_required=false, launcher 0.1.11+).
-# fichier comme asset nommé par son hash (ex. ReShadePreset.<sha8>.ini) pour
+# fichier comme asset nommé par son hash (ex. enbseries.<sha8>.ini) pour
 # éviter tout cache CDN périmé, puis on patche le manifeste live.
 #
 # Usage :
@@ -20,7 +20,12 @@ REPO="Vans74/GTRP-Launcher"
 TAG="modpack"
 BASE_PUB_URL="https://github.com/$REPO/releases/download/$TAG"
 SRC_DIR="$ROOT/modpack-work/graphics-base/gtrp-assets/enb"
-CFG_FILES=("ReShade.ini" "ReShadePreset.ini")
+CFG_FILES=(
+  ".gtrp-hd-paths"
+  ".gtrp-hd-component.json"
+  "enblocal.ini"
+  "enbseries.ini"
+)
 
 if [[ -z "${GTRP_GH_TOKEN:-}" ]]; then
   echo "ERREUR: definis la variable GTRP_GH_TOKEN avec ton token GitHub." >&2
@@ -43,7 +48,12 @@ for cf in "${CFG_FILES[@]}"; do
   [[ -f "$src" ]] || { echo "ERREUR: $src introuvable" >&2; exit 1; }
   sha=$(sha256sum "$src" | awk '{print $1}')
   size=$(stat -c %s "$src")
-  ext="${cf##*.}"; base="${cf%.*}"
+  name="$(basename "$cf")"
+  case "$name" in
+    .gtrp-hd-paths) base="hd-paths"; ext="txt" ;;
+    .gtrp-hd-component.json) base="enb-source"; ext="json" ;;
+    *) ext="${name##*.}"; base="${name%.*}" ;;
+  esac
   asset="${base}.${sha:0:8}.${ext}"
 
   # Upload seulement si cet asset (ce hash précis) n'existe pas déjà.

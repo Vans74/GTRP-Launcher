@@ -23,18 +23,18 @@ else echo "ERREUR: base graphique introuvable." >&2; exit 1; fi
 
 # NOTE (v1.44.0) : le bouton ne contrôle plus le modpack entier. Véhicules,
 # skins, armes, sons, interface, radar, modloader et ImVehFt sont permanents.
-# Proper Shaders, les routes HD et OE Mod sont les seuls contenus conditionnels.
-# Proper Shaders n'est jamais réhébergé : le launcher télécharge l'archive
-# publique officielle, la vérifie, conserve sa licence et applique seulement le
-# preset additionnel GTRP livré ici.
+# ENBSeries, les routes HD et OE Mod sont les seuls contenus conditionnels.
+# Le pack ENB source n'est jamais réhébergé : le launcher le télécharge depuis
+# le site officiel ENBDev, le vérifie et n'en extrait que le moteur et ses shaders. Les
+# réglages neutres/stables GTRP sont livrés ici puis appliqués par-dessus.
 # 597 rabaissé PROPREMENT (toute la carrosserie -0.055, roues
 # exclues → plus aucune pièce ni gyrophare « en suspend »). Gyrophares 597 =
 # éclairage universel ImVehFt sur les frames light_em (EML custom retiré).
 # ImVehFt 2.1.1 (clignotants, feux).
 # + Torrence Police LV, Stanier Unmarked, HVY APC, New Weapons Pack, Stanier LED (597).
-# ReShade, SkyGFX et Project2DFX retirés (remplacés par Proper Shaders).
+# ReShade, SkyGFX, Proper Shaders et Project2DFX retirés (remplacés par ENBSeries).
 # Atmosphere UI + Infernus DE + Vanilla + roads + OE Mod + Next Gen Weapon Sounds.
-# Real Skybox RETIRÉ (incompatible Proper Shaders).
+# Real Skybox RETIRÉ (incompatible avec la chaîne ENB retenue).
 # Radar DE et Absolute Atmosphere UI sont fournis en DOSSIERS extraits dans
 # mods-src/ (pas en .7z) ; seul Infernus reste une archive .7z.
 REQUIRED=(
@@ -59,17 +59,21 @@ rm -rf "$WORK"
 mkdir -p "$ML"
 cp -a "$BASE/." "$STAGING/"
 # Retire intégralement les anciens moteurs/effets graphiques. Ils ne doivent ni
-# cohabiter avec Proper Shaders, ni rester actifs lorsque le bouton HD est coupé.
+# cohabiter avec ENBSeries, ni rester actifs lorsque le bouton HD est coupé.
 rm -f "$STAGING"/SALodLights.asi "$STAGING"/SALodLights.dat "$STAGING"/SALodLights.ini
 rm -f "$STAGING"/d3d9.dll "$STAGING"/d3d9.dll.orig-splash
 rm -f "$STAGING"/ReShade*
 rm -f "$STAGING"/skygfx.asi "$STAGING"/skygfx.ini "$STAGING"/skygfx1.ini "$STAGING"/skygfx2.ini "$STAGING"/skygfx3.ini
 rm -f "$STAGING"/skygrad.asi
 rm -rf "$STAGING"/reshade-shaders "$STAGING"/neo "$STAGING"/models
+rm -f "$STAGING"/enbseries.asi "$STAGING"/enblocal.ini "$STAGING"/enbseries.ini
+rm -f "$STAGING"/enb*.fx "$STAGING"/enb*.fx.ini "$STAGING"/enbseries.log
+rm -rf "$STAGING"/enbseries "$ML/Proper Shaders"
 rm -f "$STAGING"/data/colorcycle.dat
 find "$STAGING/data" -type d -empty -delete 2>/dev/null || true
 echo "=== Project2DFX (SALodLights) : retiré ==="
 echo "=== ReShade / SkyGFX / SkyGrad : retirés ==="
+echo "=== Proper Shaders : retiré ==="
 
 EX="$WORK/extract"; mkdir -p "$EX"
 x7z() { mkdir -p "$EX/$1"; 7z x -y -o"$EX/$1" "$MODS_SRC/$1.7z" >/dev/null; }
@@ -93,7 +97,7 @@ cp -a "$WORK/mlx/modloader/." "$ML/"
 # 2) Improved & Fixed Original Vegetation → RETIRÉ à la demande.
 # 3) LOD Vegetation → RETIRÉ (crash SA-MP 0.3.DL).
 
-# 4) Real Skybox → RETIRÉ (conflit avec ancien Proper Shaders ; non réintégré avec SkyGFX).
+# 4) Real Skybox → RETIRÉ (non réintégré avec la chaîne ENB).
 
 # 5) Real Linear Graphics → RETIRÉ à la demande.
 
@@ -221,20 +225,19 @@ mkdir -p "$ML/New Weapons Pack"
 cp -a "$NWP_SRC/." "$ML/New Weapons Pack/"
 echo "  -> $NWP_COUNT fichier(s) dff/txd"
 
-# 17) Proper Shaders autonome + preset GTRP -------------------------------
-# Le binaire n'est PAS inclus dans ce modpack. Le launcher télécharge l'archive
-# officielle, en vérifie le hash puis applique ce preset additionnel. Cette
-# séparation respecte la licence qui interdit tout reupload en modpack.
-echo "=== Proper Shaders (source officielle + preset GTRP) ==="
+# 17) ENBSeries autonome + profil GTRP -------------------------------------
+# Le moteur et les shaders ne sont PAS inclus dans ce modpack. Le launcher
+# télécharge l'archive source, en vérifie le hash, extrait une liste blanche et
+# applique ensuite les réglages GTRP.
+echo "=== ENBSeries 0.430 (source vérifiée + profil GTRP) ==="
 ASSETS="$ROOT/assets"
-for asset in ProperShaders-GTRP.ini hd-paths.txt proper-shaders-source.json; do
+for asset in hd-paths.txt enb-source.json ENB-GTRP/enblocal.ini ENB-GTRP/enbseries.ini; do
   [[ -f "$ASSETS/$asset" ]] || { echo "ERREUR: asset $asset absent" >&2; exit 1; }
 done
-mkdir -p "$ML/Proper Shaders"
-cp -f "$ASSETS/ProperShaders-GTRP.ini" "$ML/Proper Shaders/ProperShaders.ini"
+cp -a "$ASSETS/ENB-GTRP/." "$STAGING/"
 cp -f "$ASSETS/hd-paths.txt" "$STAGING/.gtrp-hd-paths"
-cp -f "$ASSETS/proper-shaders-source.json" "$STAGING/.gtrp-hd-component.json"
-echo "  -> archive officielle non réhébergée ; preset stable/SA-MP/teintes neutres"
+cp -f "$ASSETS/enb-source.json" "$STAGING/.gtrp-hd-component.json"
+echo "  -> archive non réhébergée ; extraction filtrée ; profil SA-MP neutre"
 
 # 18) ImVehFt 2.1.1 → racine (gyrophares, clignotants, feux, saleté) ------------
 # Source : https://www.gtaall.com/gta-san-andreas/cleo/119689-improved-vehicle-features-211.html
@@ -276,9 +279,9 @@ REPORT="$ROOT/modpack-work/build-report.txt"
   find "$ML" -iname 'timecyc*.dat' -printf '    %P\n' || true
   echo "  .asi supplémentaires dans modloader/ :"
   find "$ML" -iname '*.asi' -printf '    %P\n' || echo "    (aucun)"
-  echo "  source Proper Shaders : $(test -f "$STAGING/.gtrp-hd-component.json" && echo présente || echo ABSENTE)"
-  echo "  preset Proper Shaders : $(test -f "$ML/Proper Shaders/ProperShaders.ini" && echo présent || echo ABSENT)"
-  echo "  binaire ProperShaders.asi réhébergé : $(find "$STAGING" -iname 'ProperShaders.asi' | wc -l) (attendu 0)"
+  echo "  source ENB : $(test -f "$STAGING/.gtrp-hd-component.json" && echo présente || echo ABSENTE)"
+  echo "  profil ENB GTRP : $(test -f "$STAGING/enbseries.ini" && echo présent || echo ABSENT)"
+  echo "  binaire enbseries.asi réhébergé : $(find "$STAGING" -iname 'enbseries.asi' | wc -l) (attendu 0)"
   echo ""
   echo "--- Comptage fichiers jeu (txd/dff/wav) ---"
   echo "  .txd : $(find "$ML" -iname '*.txd' | wc -l)   .dff : $(find "$ML" -iname '*.dff' | wc -l)   .wav : $(find "$ML" -iname '*.wav' | wc -l)"
@@ -310,11 +313,12 @@ BASE_PUB_URL="https://github.com/Vans74/GTRP-Launcher/releases/download/modpack"
 CFG_FILES=(
   ".gtrp-hd-paths"
   ".gtrp-hd-component.json"
-  "modloader/Proper Shaders/ProperShaders.ini"
+  "enblocal.ini"
+  "enbseries.ini"
 )
 
 # Nettoie les anciennes copies d'assets config avant régénération.
-rm -f "$ROOT"/modpack-work/hd-paths.*.txt "$ROOT"/modpack-work/proper-shaders-source.*.json "$ROOT"/modpack-work/ProperShaders.*.ini 2>/dev/null || true
+rm -f "$ROOT"/modpack-work/hd-paths.*.txt "$ROOT"/modpack-work/enb-source.*.json "$ROOT"/modpack-work/enblocal.*.ini "$ROOT"/modpack-work/enbseries.*.ini 2>/dev/null || true
 
 CFG_SPECS=()   # "path_in_game|asset_name" pour l'étape d'upload
 for cf in "${CFG_FILES[@]}"; do
@@ -324,7 +328,7 @@ for cf in "${CFG_FILES[@]}"; do
   cname="$(basename "$cf")"
   case "$cname" in
     .gtrp-hd-paths) cbase="hd-paths"; cext="txt" ;;
-    .gtrp-hd-component.json) cbase="proper-shaders-source"; cext="json" ;;
+    .gtrp-hd-component.json) cbase="enb-source"; cext="json" ;;
     *) cext="${cname##*.}"; cbase="${cname%.*}" ;;
   esac
   asset="${cbase}.${csha:0:8}.${cext}"

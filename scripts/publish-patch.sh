@@ -9,7 +9,7 @@
 # Usage :
 #   GTRP_GH_TOKEN=ghp_xxx ./scripts/publish-patch.sh 1.34.4 \
 #     modloader/.../copcarsf.dff \
-#     gtrp-assets/enb/ReShadePreset.ini
+#     gtrp-assets/enb/enbseries.ini
 #
 # Chaque chemin est relatif au dossier racine GTA (comme dans le manifeste).
 # Le fichier source est cherché dans modpack-work/graphics-base/<chemin>.

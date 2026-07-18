@@ -5,10 +5,10 @@
 //! sont toujours copiés dans le jeu. Seuls les chemins déclarés dans
 //! `.gtrp-hd-paths` dépendent du bouton « Graphismes HD ».
 //!
-//! Proper Shaders reste un composant autonome : le launcher le télécharge
-//! directement depuis l'URL officielle décrite par `.gtrp-hd-component.json`,
-//! vérifie son SHA-256 et conserve sa licence. Le modpack GTRP ne réhéberge que
-//! le preset `.ini` additionnel.
+//! Le moteur ENB reste un composant autonome : le launcher le télécharge depuis
+//! l'URL décrite par `.gtrp-hd-component.json`, vérifie son SHA-256 et n'extrait
+//! que les fichiers explicitement autorisés. Le modpack GTRP ne réhéberge que
+//! ses réglages additionnels.
 
 use crate::error::{LauncherError, Result};
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ pub const ENB_MARKER: &str = ".gtrp_enb_active";
 /// Liste des chemins conditionnels au bouton Graphismes HD.
 pub const HD_PATHS_FILE: &str = ".gtrp-hd-paths";
 
-/// Source officielle du composant graphique autonome (Proper Shaders).
+/// Source du composant graphique autonome.
 pub const HD_COMPONENT_FILE: &str = ".gtrp-hd-component.json";
 
 /// Nom neutre sous lequel le modpack livre l'Ultimate ASI Loader.
@@ -58,12 +58,43 @@ const DEFAULT_HD_PATHS: &[&str] = &[
     "neo/",
     "data/colorcycle.dat",
     "models/",
+    "enblocal.ini",
+    "enbseries.ini",
+    "enbseries/",
+    "enbbloom.fx",
+    "enbdepthoffield.fx",
+    "enbeffect.fx",
+    "enbeffectprepass.fx",
+    "enbenvmap.fx",
+    "enblens.fx",
+    "enblighting.fx",
+    "enbsky.fx",
+    "enbunderwater.fx",
+    "enbvehicle.fx",
+    "enbwater.fx",
     "modloader/OE Mod/",
     "modloader/Vanilla + roads/",
     "modloader/Proper Shaders/",
 ];
 
 const PROJECT2DFX_FILES: &[&str] = &["SALodLights.asi", "SALodLights.dat", "SALodLights.ini"];
+
+/// Fichiers de réglage/log qu'ENB peut générer à l'exécution et qui ne figurent
+/// donc pas nécessairement dans l'inventaire écrit avant le lancement du jeu.
+const HD_RUNTIME_ORPHANS: &[&str] = &[
+    "enbbloom.fx.ini",
+    "enbdepthoffield.fx.ini",
+    "enbeffect.fx.ini",
+    "enbeffectprepass.fx.ini",
+    "enbenvmap.fx.ini",
+    "enblens.fx.ini",
+    "enblighting.fx.ini",
+    "enbsky.fx.ini",
+    "enbunderwater.fx.ini",
+    "enbvehicle.fx.ini",
+    "enbwater.fx.ini",
+    "enbseries.log",
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EnbPrepareResult {
@@ -80,6 +111,10 @@ struct HdComponentManifest {
     sha256: String,
     cache_key: String,
     archive_prefix: String,
+    #[serde(default)]
+    destination: Option<String>,
+    #[serde(default)]
+    include: Vec<String>,
 }
 
 pub fn staging_dir(gta_root: &Path) -> PathBuf {
@@ -121,7 +156,16 @@ pub fn prepare(gta_root: &Path, hd_enabled: bool) -> Result<EnbPrepareResult> {
 
     // Retire le déploiement précédent (y compris un ancien pack monolithique),
     // puis reconstruit l'état voulu de façon déterministe.
-    cleanup_previous_deployment(gta_root, &staging, component_payload.as_deref())?;
+    let component_destination = component
+        .as_ref()
+        .map(|manifest| component_destination(gta_root, manifest))
+        .transpose()?;
+    cleanup_previous_deployment(
+        gta_root,
+        &staging,
+        component_payload.as_deref(),
+        component_destination.as_deref(),
+    )?;
     purge_project2dfx_orphans(gta_root);
 
     let mut deployed = Vec::new();
@@ -130,8 +174,12 @@ pub fn prepare(gta_root: &Path, hd_enabled: bool) -> Result<EnbPrepareResult> {
     // staging est ensuite copié par-dessus.
     if hd_enabled {
         if let Some(payload) = component_payload.as_deref() {
-            let destination = gta_root.join("modloader").join("Proper Shaders");
-            copy_tree(payload, &destination, &destination, &mut deployed)?;
+            let destination = component_destination
+                .as_deref()
+                .ok_or_else(|| {
+                    LauncherError::Integrity("destination du composant HD absente".into())
+                })?;
+            copy_tree(payload, destination, gta_root, &mut deployed)?;
         }
     }
 
@@ -276,7 +324,7 @@ fn copy_staging_files(
 fn copy_tree(
     src: &Path,
     dst: &Path,
-    inventory_base: &Path,
+    game_root: &Path,
     deployed: &mut Vec<String>,
 ) -> Result<()> {
     fs::create_dir_all(dst)?;
@@ -285,21 +333,17 @@ fn copy_tree(
         let path = entry.path();
         let target = dst.join(entry.file_name());
         if path.is_dir() {
-            copy_tree(&path, &target, inventory_base, deployed)?;
+            copy_tree(&path, &target, game_root, deployed)?;
         } else if path.is_file() {
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
             }
             fs::copy(&path, &target)?;
-            // `inventory_base` pointe vers game_root/modloader/Proper Shaders.
-            let component_rel = target
-                .strip_prefix(inventory_base)
+            let rel = target
+                .strip_prefix(game_root)
                 .map_err(|_| LauncherError::Io("chemin de composant HD invalide".into()))?;
-            let rel = Path::new("modloader")
-                .join("Proper Shaders")
-                .join(component_rel)
-                .to_string_lossy()
-                .replace('\\', "/");
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            validate_relative_str(&rel)?;
             deployed.push(rel);
         }
     }
@@ -318,8 +362,10 @@ fn load_hd_component_manifest(staging: &Path) -> Result<Option<HdComponentManife
 }
 
 fn validate_component_manifest(manifest: &HdComponentManifest) -> Result<()> {
+    let trusted_url = manifest.url.starts_with("https://")
+        || manifest.url == "http://enbdev.com/enbseries_gtasa_v0430.zip";
     if manifest.name.trim().is_empty()
-        || !manifest.url.starts_with("https://")
+        || !trusted_url
         || manifest.sha256.len() != 64
         || !manifest.sha256.chars().all(|c| c.is_ascii_hexdigit())
         || manifest.cache_key.is_empty()
@@ -334,7 +380,50 @@ fn validate_component_manifest(manifest: &HdComponentManifest) -> Result<()> {
         ));
     }
     normalize_archive_prefix(&manifest.archive_prefix)?;
+    component_destination(Path::new("."), manifest)?;
+    normalize_component_includes(&manifest.include)?;
     Ok(())
+}
+
+fn component_destination(gta_root: &Path, manifest: &HdComponentManifest) -> Result<PathBuf> {
+    match manifest.destination.as_deref() {
+        // Compatibilité avec les descripteurs Proper Shaders déjà distribués.
+        None => Ok(gta_root.join("modloader").join("Proper Shaders")),
+        Some(value) if value.trim().is_empty() || value.trim() == "." => {
+            Ok(gta_root.to_path_buf())
+        }
+        Some(value) => {
+            let normalized = value
+                .trim()
+                .replace('\\', "/")
+                .trim_matches('/')
+                .to_string();
+            validate_relative_str(&normalized)?;
+            Ok(gta_root.join(normalized))
+        }
+    }
+}
+
+fn normalize_component_includes(includes: &[String]) -> Result<Vec<String>> {
+    includes.iter().map(|rule| normalize_rule(rule)).collect()
+}
+
+fn component_path_is_included(rel: &str, includes: &[String]) -> bool {
+    if includes.is_empty() {
+        return true;
+    }
+    let rel = rel
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
+    includes.iter().any(|rule| {
+        if rule.ends_with('/') {
+            let prefix = rule.trim_end_matches('/');
+            rel == prefix || rel.starts_with(rule.as_str())
+        } else {
+            rel == rule.as_str()
+        }
+    })
 }
 
 fn normalize_archive_prefix(prefix: &str) -> Result<String> {
@@ -394,6 +483,7 @@ fn ensure_hd_component(gta_root: &Path, manifest: &HdComponentManifest) -> Resul
         LauncherError::Integrity(format!("archive {} invalide : {e}", manifest.name))
     })?;
     let prefix = normalize_archive_prefix(&manifest.archive_prefix)?;
+    let includes = normalize_component_includes(&manifest.include)?;
     let mut extracted_files = 0usize;
 
     for index in 0..archive.len() {
@@ -407,6 +497,9 @@ fn ensure_hd_component(gta_root: &Path, manifest: &HdComponentManifest) -> Resul
                 continue;
             }
             validate_relative_str(rel.trim_end_matches('/'))?;
+            if !component_path_is_included(rel, &includes) {
+                continue;
+            }
             let destination = payload.join(rel);
             if entry.is_dir() || name.ends_with('/') {
                 fs::create_dir_all(&destination)?;
@@ -427,7 +520,14 @@ fn ensure_hd_component(gta_root: &Path, manifest: &HdComponentManifest) -> Resul
         let base_name = Path::new(&name).file_name().and_then(|v| v.to_str());
         if matches!(
             base_name,
-            Some("License.txt" | "Readme (or die).txt" | "Third Party.txt")
+            Some(
+                "License.txt"
+                    | "LICENSE"
+                    | "Readme.txt"
+                    | "README.txt"
+                    | "Readme (or die).txt"
+                    | "Third Party.txt"
+            )
         ) && !entry.is_dir()
         {
             let destination = component_root.join("license").join(base_name.unwrap());
@@ -493,25 +593,36 @@ fn uninstall_asi_loader(gta_root: &Path, staging: &Path) {
 
 pub fn undeploy(gta_root: &Path) -> Result<()> {
     let staging = staging_dir(gta_root);
-    let component = load_hd_component_manifest(&staging)
-        .ok()
-        .flatten()
-        .map(|manifest| component_payload_dir(gta_root, &manifest))
+    let manifest = load_hd_component_manifest(&staging).ok().flatten();
+    let component = manifest
+        .as_ref()
+        .map(|manifest| component_payload_dir(gta_root, manifest))
         .filter(|path| path.is_dir());
-    cleanup_previous_deployment(gta_root, &staging, component.as_deref())
+    let destination = manifest
+        .as_ref()
+        .and_then(|manifest| component_destination(gta_root, manifest).ok());
+    cleanup_previous_deployment(
+        gta_root,
+        &staging,
+        component.as_deref(),
+        destination.as_deref(),
+    )
 }
 
 fn cleanup_previous_deployment(
     gta_root: &Path,
     staging: &Path,
     component_payload: Option<&Path>,
+    component_destination: Option<&Path>,
 ) -> Result<()> {
     let marker = gta_root.join(ENB_MARKER);
     if !marker.is_file() {
+        purge_hd_runtime_orphans(gta_root);
         return Ok(());
     }
 
     let mut inventory_found = false;
+    let mut empty_dir_candidates = Vec::new();
     if let Ok(content) = fs::read_to_string(&marker) {
         for line in content.lines() {
             let Some(rel) = line.strip_prefix("file=") else {
@@ -522,8 +633,25 @@ fn cleanup_previous_deployment(
             if target.is_file() {
                 let _ = fs::remove_file(&target);
             }
+            let mut parent = target.parent();
+            while let Some(directory) = parent {
+                if directory == gta_root || !directory.starts_with(gta_root) {
+                    break;
+                }
+                empty_dir_candidates.push(directory.to_path_buf());
+                parent = directory.parent();
+            }
             inventory_found = true;
         }
+    }
+
+    // Supprime uniquement les dossiers devenus vides, du plus profond au plus
+    // proche de la racine. `remove_dir` laisse intacts les dossiers contenant
+    // des fichiers qui ne sont pas gérés par le launcher.
+    empty_dir_candidates.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    empty_dir_candidates.dedup();
+    for directory in empty_dir_candidates {
+        let _ = fs::remove_dir(directory);
     }
 
     // Migration depuis le marqueur v1 (« 1 »), sans inventaire.
@@ -531,13 +659,13 @@ fn cleanup_previous_deployment(
         if staging.is_dir() {
             remove_tree_targets(staging, gta_root, staging)?;
         }
-        if let Some(payload) = component_payload {
-            let destination = gta_root.join("modloader").join("Proper Shaders");
-            remove_tree_targets(payload, &destination, payload)?;
+        if let (Some(payload), Some(destination)) = (component_payload, component_destination) {
+            remove_tree_targets(payload, destination, payload)?;
         }
     }
 
     purge_project2dfx_orphans(gta_root);
+    purge_hd_runtime_orphans(gta_root);
     uninstall_asi_loader(gta_root, staging);
     let _ = fs::remove_file(marker);
     Ok(())
@@ -779,5 +907,94 @@ mod tests {
         // Le cache officiel est conservé pour une réactivation instantanée.
         assert!(archive_path.is_file());
         let _ = fs::remove_dir_all(&game);
+    }
+
+    #[test]
+    fn component_can_deploy_selected_files_to_game_root() {
+        let game = tmp("root_component");
+        let staging = create_split_pack(&game);
+        fs::write(staging.join("enbseries.ini"), b"GTRP-PRESET").unwrap();
+        fs::write(
+            staging.join(HD_PATHS_FILE),
+            b"enbseries.asi\nenbseries.ini\nenbseries/\n",
+        )
+        .unwrap();
+
+        let downloads = components_root(&game).join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        let archive_path = downloads.join("enb-test.zip");
+        let archive_file = fs::File::create(&archive_path).unwrap();
+        let mut archive = zip::ZipWriter::new(archive_file);
+        for (name, body) in [
+            ("Pack/enbseries.asi", &b"ENB-BINARY"[..]),
+            ("Pack/enbseries/enbhelper.dll", &b"ENB-HELPER"[..]),
+            ("Pack/SilentPatchSA.asi", &b"UNWANTED"[..]),
+        ] {
+            archive
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(body).unwrap();
+        }
+        archive.finish().unwrap();
+
+        let sha = crate::updater::sha256_file(&archive_path).unwrap();
+        let descriptor = serde_json::json!({
+            "name": "ENB test",
+            "url": "https://invalid.example/enb.zip",
+            "sha256": sha,
+            "cache_key": "enb-test",
+            "archive_prefix": "Pack/",
+            "destination": "",
+            "include": ["enbseries.asi", "enbseries/"]
+        });
+        fs::write(
+            staging.join(HD_COMPONENT_FILE),
+            serde_json::to_vec_pretty(&descriptor).unwrap(),
+        )
+        .unwrap();
+
+        prepare(&game, true).unwrap();
+        assert_eq!(fs::read(game.join("enbseries.asi")).unwrap(), b"ENB-BINARY");
+        assert_eq!(
+            fs::read(game.join("enbseries/enbhelper.dll")).unwrap(),
+            b"ENB-HELPER"
+        );
+        assert_eq!(fs::read(game.join("enbseries.ini")).unwrap(), b"GTRP-PRESET");
+        assert!(!game.join("SilentPatchSA.asi").exists());
+        fs::write(game.join("enbseries.log"), b"runtime log").unwrap();
+        fs::write(game.join("enbeffect.fx.ini"), b"runtime settings").unwrap();
+
+        prepare(&game, false).unwrap();
+        assert!(!game.join("enbseries.asi").exists());
+        assert!(!game.join("enbseries.ini").exists());
+        assert!(!game.join("enbseries").exists());
+        assert!(!game.join("enbseries.log").exists());
+        assert!(!game.join("enbeffect.fx.ini").exists());
+        assert!(game.join("modloader/Vehicles/car.dff").is_file());
+        let _ = fs::remove_dir_all(&game);
+    }
+
+    #[test]
+    fn only_the_pinned_enbdev_http_archive_is_allowed() {
+        let base = HdComponentManifest {
+            name: "ENB".into(),
+            url: "http://enbdev.com/enbseries_gtasa_v0430.zip".into(),
+            sha256: "a".repeat(64),
+            cache_key: "enb-test".into(),
+            archive_prefix: "WrapperVersion/".into(),
+            destination: Some(String::new()),
+            include: vec!["d3d9.dll".into()],
+        };
+        validate_component_manifest(&base).unwrap();
+
+        let mut untrusted = base;
+        untrusted.url = "http://example.com/enbseries_gtasa_v0430.zip".into();
+        assert!(validate_component_manifest(&untrusted).is_err());
+    }
+}
+
+fn purge_hd_runtime_orphans(gta_root: &Path) {
+    for name in HD_RUNTIME_ORPHANS {
+        let _ = fs::remove_file(gta_root.join(name));
     }
 }

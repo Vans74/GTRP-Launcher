@@ -50,10 +50,11 @@ upload_if_missing() {
 
 echo "=== Upload bundle + assets config ==="
 upload_if_missing "$ZIP" "gtrp-modpack-$VERSION.zip"
-for asset in "$WORK"/ReShade.*.ini "$WORK"/ReShadePreset.*.ini; do
-  [[ -f "$asset" ]] || continue
-  upload_if_missing "$asset" "$(basename "$asset")"
-done
+while IFS= read -r asset; do
+  [[ -n "$asset" ]] || continue
+  [[ -f "$WORK/$asset" ]] || { echo "ERREUR: asset config $asset introuvable" >&2; exit 1; }
+  upload_if_missing "$WORK/$asset" "$asset"
+done < <(python3 -c "import json,urllib.parse; m=json.load(open('$MANIFEST')); print('\\n'.join(urllib.parse.urlparse(f['url']).path.rsplit('/',1)[-1] for f in m.get('files',[])))")
 
 echo "=== Remplacement manifest.json ==="
 OLD_MID=$(echo "$ASSETS_JSON" | python3 -c "import sys,json;print(next((a['id'] for a in json.load(sys.stdin) if a['name']=='manifest.json'),''))")

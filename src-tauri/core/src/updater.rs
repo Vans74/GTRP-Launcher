@@ -262,7 +262,14 @@ pub(crate) fn download_verify<F: FnMut(u64)>(
         std::fs::create_dir_all(parent)?;
     }
 
-    let resp = ureq::get(url)
+    let mut request = ureq::get(url).set(
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GTRP-Launcher",
+    );
+    if url == "http://enbdev.com/enbseries_gtasa_v0430.zip" {
+        request = request.set("Referer", "http://enbdev.com/mod_gtasa_v0430.htm");
+    }
+    let resp = request
         .timeout(std::time::Duration::from_secs(60))
         .call()
         .map_err(|e| LauncherError::Network(format!("{url} : {e}")))?;

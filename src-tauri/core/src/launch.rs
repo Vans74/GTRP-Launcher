@@ -41,7 +41,7 @@ pub fn launch(install: &GameInstall, nickname: &str, host: &str, port: u16) -> R
         .map_err(|e| LauncherError::Config(format!("écriture gta_sa_exe : {e}")))?;
 
     // 1bis) Correctif de compatibilité ENBSeries sur Windows 8/10/11.
-    // ENBSeries (0.2xx/0.3xx) plante au démarrage sur Windows récent à cause de
+    // ENBSeries (0.2xx à 0.4xx) peut planter au démarrage sur Windows récent à cause de
     // clés de registre parasites (mode de compatibilité forcé + entrées
     // MostRecentApplication de DirectDraw/Direct3D dans le VirtualStore). On les
     // purge avant chaque lancement — c'est le même correctif que les scripts
