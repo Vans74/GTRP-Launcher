@@ -80,6 +80,26 @@
         </div>
 
         <div class="play-zone">
+          <div
+            class="activity-status"
+            id="activity-status"
+            data-kind="info"
+            role="status"
+            aria-live="polite"
+            hidden
+          >
+            <span class="activity-status-icon" aria-hidden="true"></span>
+            <span class="activity-status-message" id="activity-status-message"></span>
+            <button
+              class="activity-status-close"
+              id="activity-status-close"
+              type="button"
+              aria-label="Masquer la notification"
+              title="Masquer"
+            >
+              &times;
+            </button>
+          </div>
           <div class="progress" id="progress" hidden>
             <div class="progress-bar" id="progress-bar"></div>
             <span class="progress-text" id="progress-text"></span>
@@ -97,9 +117,6 @@
         <button class="social" id="btn-web" title="Site web">Site web</button>
         <span class="version" id="version">v0.0.0</span>
       </div>
-
-      <!-- Zone de notifications -->
-      <div class="toasts" id="toasts"></div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

@@ -423,15 +423,100 @@ input {
 .play-zone {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  /* Écart suffisant pour que le texte de progression (positionné sous la barre,
-     top: 12px) ne chevauche pas le bouton. La barre étant masquée hors mise à
-     jour, cet écart ne s'applique qu'aux deux éléments visibles simultanément. */
-  gap: 24px;
+  align-items: stretch;
+  width: 330px;
+  gap: 14px;
+}
+
+.activity-status {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 9px 8px 10px;
+  border: 1px solid rgba(53, 192, 255, 0.28);
+  border-left: 3px solid var(--blue-bright);
+  border-radius: 11px;
+  background: linear-gradient(135deg, rgba(16, 30, 45, 0.98), rgba(10, 18, 29, 0.98));
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  animation: activity-status-in 0.22s ease-out;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.activity-status[hidden] { display: none; }
+.activity-status.is-leaving {
+  opacity: 0;
+  transform: translateY(4px);
+}
+.activity-status[data-kind="success"] {
+  border-color: rgba(52, 209, 122, 0.35);
+  border-left-color: var(--ok);
+}
+.activity-status[data-kind="error"] {
+  border-color: rgba(255, 90, 106, 0.42);
+  border-left-color: var(--danger);
+}
+.activity-status-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--blue-bright);
+  background: rgba(53, 192, 255, 0.12);
+  font-size: 12px;
+  font-weight: 800;
+}
+.activity-status-icon::before { content: "i"; }
+.activity-status[data-kind="success"] .activity-status-icon {
+  color: var(--ok);
+  background: rgba(52, 209, 122, 0.12);
+}
+.activity-status[data-kind="success"] .activity-status-icon::before { content: "✓"; }
+.activity-status[data-kind="error"] .activity-status-icon {
+  color: var(--danger);
+  background: rgba(255, 90, 106, 0.12);
+}
+.activity-status[data-kind="error"] .activity-status-icon::before { content: "!"; }
+.activity-status-message {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.activity-status-close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.activity-status-close:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+@keyframes activity-status-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .progress {
   position: relative;
-  width: 260px;
+  width: 100%;
   height: 8px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
@@ -452,11 +537,15 @@ input {
   font-size: 11px;
   color: var(--text-dim);
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .play-btn {
   position: relative;
-  min-width: 260px;
+  width: 100%;
+  min-width: 0;
   padding: 14px 40px;
   border: none;
   border-radius: 12px;
@@ -517,33 +606,4 @@ input {
   margin-left: auto;
   font-size: 11px;
   color: var(--text-dim);
-}
-
-/* ---------- Toasts ---------- */
-.toasts {
-  position: absolute;
-  z-index: 20;
-  right: 18px;
-  bottom: 90px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  align-items: flex-end;
-}
-.toast {
-  padding: 12px 16px;
-  border-radius: 10px;
-  background: rgba(14, 22, 34, 0.95);
-  border: 1px solid var(--panel-border);
-  color: var(--text);
-  font-size: 13px;
-  max-width: 340px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  animation: slidein 0.25s ease;
-}
-.toast.error { border-color: var(--danger); }
-.toast.success { border-color: var(--ok); }
-@keyframes slidein {
-  from { opacity: 0; transform: translateX(20px); }
-  to { opacity: 1; transform: translateX(0); }
 }

@@ -18,20 +18,83 @@ const state = {
   needsUpdate: false,
   launcherUpdating: false,
   lastUpdateCheck: 0,
+  updateNoticeSignature: null,
+};
+
+const noticeState = {
+  currentKey: null,
+  persistent: null,
+  timeoutId: null,
+  transitionId: null,
 };
 
 /* ---------------- Utilitaires ---------------- */
 
-function toast(message, kind = "info", timeout = 4000) {
-  const box = el("toasts");
-  const t = document.createElement("div");
-  t.className = `toast ${kind}`;
-  t.textContent = message;
-  box.appendChild(t);
-  setTimeout(() => {
-    t.style.opacity = "0";
-    setTimeout(() => t.remove(), 300);
-  }, timeout);
+function renderNotice(notice) {
+  clearTimeout(noticeState.transitionId);
+  const box = el("activity-status");
+  box.classList.remove("is-leaving");
+  box.dataset.kind = notice.kind;
+  box.setAttribute("role", notice.kind === "error" ? "alert" : "status");
+  const message = el("activity-status-message");
+  message.textContent = notice.message;
+  message.title = notice.message;
+  noticeState.currentKey = notice.key;
+  box.hidden = false;
+}
+
+function hideNotice() {
+  clearTimeout(noticeState.transitionId);
+  const box = el("activity-status");
+  if (box.hidden) return;
+  box.classList.add("is-leaving");
+  noticeState.transitionId = setTimeout(() => {
+    box.hidden = true;
+    box.classList.remove("is-leaving");
+    noticeState.currentKey = null;
+  }, 180);
+}
+
+function showPersistentNoticeOrHide() {
+  if (noticeState.persistent) {
+    renderNotice(noticeState.persistent);
+  } else {
+    hideNotice();
+  }
+}
+
+function toast(message, kind = "info", timeout = 4000, key = null) {
+  clearTimeout(noticeState.timeoutId);
+  const notice = { message, kind, key: key || `${kind}:${message}` };
+
+  if (timeout <= 0) {
+    noticeState.persistent = notice;
+    renderNotice(notice);
+    return;
+  }
+
+  renderNotice(notice);
+  noticeState.timeoutId = setTimeout(showPersistentNoticeOrHide, timeout);
+}
+
+function clearNotice(key = null) {
+  if (!key || noticeState.persistent?.key === key) {
+    noticeState.persistent = null;
+  }
+  if (!key || noticeState.currentKey === key) {
+    clearTimeout(noticeState.timeoutId);
+    showPersistentNoticeOrHide();
+  }
+}
+
+function dismissCurrentNotice() {
+  clearTimeout(noticeState.timeoutId);
+  if (noticeState.currentKey === noticeState.persistent?.key) {
+    noticeState.persistent = null;
+    hideNotice();
+    return;
+  }
+  showPersistentNoticeOrHide();
 }
 
 async function call(cmd, args) {
@@ -232,10 +295,19 @@ async function checkUpdates() {
     const plan = await call("check_updates");
     state.needsUpdate = !plan.up_to_date;
     if (state.needsUpdate) {
-      toast(
-        `${plan.files.length} fichier(s) à mettre à jour (${fmtBytes(plan.total_bytes)}).`,
-        "info"
-      );
+      const signature = `${plan.files.length}:${plan.total_bytes}`;
+      if (signature !== state.updateNoticeSignature) {
+        toast(
+          `${plan.files.length} fichier(s) à mettre à jour (${fmtBytes(plan.total_bytes)}).`,
+          "info",
+          0,
+          "modpack-update",
+        );
+        state.updateNoticeSignature = signature;
+      }
+    } else {
+      state.updateNoticeSignature = null;
+      clearNotice("modpack-update");
     }
   } catch (e) {
     // Pas bloquant : on laisse jouer même si le manifest est injoignable.
@@ -251,14 +323,17 @@ async function runUpdatesThenLaunch() {
 
   if (state.needsUpdate) {
     state.updating = true;
+    clearNotice("modpack-update");
     updatePlayButton();
     try {
       await call("apply_updates");
       state.needsUpdate = false;
+      state.updateNoticeSignature = null;
       el("progress").hidden = true;
       toast("Mise à jour terminée.", "success");
     } catch (e) {
       state.updating = false;
+      state.updateNoticeSignature = null;
       el("progress").hidden = true;
       updatePlayButton();
       toast(`Échec de la mise à jour : ${e}`, "error");
@@ -399,6 +474,7 @@ async function init() {
   el("browse-game").addEventListener("click", browseGame);
   el("enhanced-graphics").addEventListener("change", saveEnhancedGraphics);
   el("play-btn").addEventListener("click", runUpdatesThenLaunch);
+  el("activity-status-close").addEventListener("click", dismissCurrentNotice);
   el("refresh-news").addEventListener("click", refreshNews);
   el("btn-discord").addEventListener("click", () =>
     openUrl(state.config.discord_url).catch(() => {})
