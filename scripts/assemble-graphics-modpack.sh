@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assemble le modpack graphique GTRP : base ReShade + Project2DFX + 7 mods MixMods.
+# Assemble le modpack GTRP : contenus permanents + graphismes HD optionnels.
 #
 # Usage : ./assemble-graphics-modpack.sh [VERSION]   (défaut 1.19.0)
 #
@@ -9,6 +9,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 MODS_SRC="$ROOT/mods-src"
 WORK="$ROOT/modpack-work/build"
 STAGING="$WORK/gtrp-assets/enb"
@@ -20,14 +21,23 @@ if [[ -d "$BASE_REPO" ]]; then BASE="$BASE_REPO"
 elif [[ -d "$BASE_TMP" ]]; then BASE="$BASE_TMP"
 else echo "ERREUR: base graphique introuvable." >&2; exit 1; fi
 
-# NOTE (v1.39.0) : Vapid Stanier Police LED (copcarsf / véhicule 597 Police SF).
-# Project2DFX retiré. Proper Shaders + SAMPGraphicRestore.
+# NOTE (v1.44.0) : le bouton ne contrôle plus le modpack entier. Véhicules,
+# skins, armes, sons, interface, radar, modloader et ImVehFt sont permanents.
+# Proper Shaders, les routes HD et OE Mod sont les seuls contenus conditionnels.
+# Proper Shaders n'est jamais réhébergé : le launcher télécharge l'archive
+# publique officielle, la vérifie, conserve sa licence et applique seulement le
+# preset additionnel GTRP livré ici.
+# 597 rabaissé PROPREMENT (toute la carrosserie -0.055, roues
+# exclues → plus aucune pièce ni gyrophare « en suspend »). Gyrophares 597 =
+# éclairage universel ImVehFt sur les frames light_em (EML custom retiré).
+# ImVehFt 2.1.1 (clignotants, feux).
+# + Torrence Police LV, Stanier Unmarked, HVY APC, New Weapons Pack, Stanier LED (597).
+# ReShade, SkyGFX et Project2DFX retirés (remplacés par Proper Shaders).
 # Atmosphere UI + Infernus DE + Vanilla + roads + OE Mod + Next Gen Weapon Sounds.
 # Real Skybox RETIRÉ (incompatible Proper Shaders).
 # Radar DE et Absolute Atmosphere UI sont fournis en DOSSIERS extraits dans
 # mods-src/ (pas en .7z) ; seul Infernus reste une archive .7z.
 REQUIRED=(
-  "Sky_Gradient_Fix.7z"
   "Infernus_DE.7z"
   "Next_Gen_Weapon_Sounds.7z"
 )
@@ -40,7 +50,7 @@ done
 [[ $miss -eq 1 ]] && { echo "Dépose les archives manquantes dans $MODS_SRC" >&2; exit 1; }
 
 echo "=== Base + fichiers critiques ==="
-for crit in vorbisFileLoader.dll d3d9.dll; do
+for crit in vorbisFileLoader.dll; do
   [[ -f "$BASE/$crit" ]] || { echo "ERREUR: base incomplète ($crit)" >&2; exit 1; }
 done
 
@@ -48,9 +58,18 @@ echo "=== Staging ==="
 rm -rf "$WORK"
 mkdir -p "$ML"
 cp -a "$BASE/." "$STAGING/"
-# Project2DFX (SALodLights) retiré : on purge ses fichiers de la base.
+# Retire intégralement les anciens moteurs/effets graphiques. Ils ne doivent ni
+# cohabiter avec Proper Shaders, ni rester actifs lorsque le bouton HD est coupé.
 rm -f "$STAGING"/SALodLights.asi "$STAGING"/SALodLights.dat "$STAGING"/SALodLights.ini
+rm -f "$STAGING"/d3d9.dll "$STAGING"/d3d9.dll.orig-splash
+rm -f "$STAGING"/ReShade*
+rm -f "$STAGING"/skygfx.asi "$STAGING"/skygfx.ini "$STAGING"/skygfx1.ini "$STAGING"/skygfx2.ini "$STAGING"/skygfx3.ini
+rm -f "$STAGING"/skygrad.asi
+rm -rf "$STAGING"/reshade-shaders "$STAGING"/neo "$STAGING"/models
+rm -f "$STAGING"/data/colorcycle.dat
+find "$STAGING/data" -type d -empty -delete 2>/dev/null || true
 echo "=== Project2DFX (SALodLights) : retiré ==="
+echo "=== ReShade / SkyGFX / SkyGrad : retirés ==="
 
 EX="$WORK/extract"; mkdir -p "$EX"
 x7z() { mkdir -p "$EX/$1"; 7z x -y -o"$EX/$1" "$MODS_SRC/$1.7z" >/dev/null; }
@@ -74,13 +93,9 @@ cp -a "$WORK/mlx/modloader/." "$ML/"
 # 2) Improved & Fixed Original Vegetation → RETIRÉ à la demande.
 # 3) LOD Vegetation → RETIRÉ (crash SA-MP 0.3.DL).
 
-# 4) Real Skybox → RETIRÉ (incompatible Proper Shaders — nuages intégrés au shader).
+# 4) Real Skybox → RETIRÉ (conflit avec ancien Proper Shaders ; non réintégré avec SkyGFX).
 
 # 5) Real Linear Graphics → RETIRÉ à la demande.
-
-# 6) SkyGrad → .asi à la racine (chargé par l'ASI loader vorbisFile.dll) -----
-echo "=== SkyGrad ==="
-find "$EX/Sky_Gradient_Fix" -iname 'skygrad.asi' -exec cp -a {} "$STAGING/" \;
 
 # 7) Effects Mod → RETIRÉ (crash C++ 0xE06D7363 qq secondes après spawn sur 0.3.DL).
 
@@ -146,47 +161,99 @@ VS_SRC="$(find "$MODS_SRC" -maxdepth 1 -type d \( -iname 'vapid*stanier*police*l
 [[ -n "$VS_SRC" ]] || { echo "ERREUR: dossier 'Vapid Stanier Police LED' introuvable dans mods-src" >&2; exit 1; }
 [[ -f "$VS_SRC/copcarsf.dff" && -f "$VS_SRC/copcarsf.txd" ]] || { echo "ERREUR: copcarsf.dff/txd introuvable dans $VS_SRC" >&2; exit 1; }
 mkdir -p "$ML/Vapid Stanier Police LED"
-python3 - "$VS_SRC/copcarsf.dff" "$ML/Vapid Stanier Police LED/copcarsf.dff" <<'PY'
-import struct, sys, re
-src, dst = sys.argv[1], sys.argv[2]
-data = bytearray(open(src,'rb').read())
-patched = 0
-for m in re.finditer(rb'[\x20-\x7e]{24,}', bytes(data)):
-    s = m.group()
-    # Noms de frames lisibles (espaces, pas de chemins matériaux type vehicle_generic_*).
-    if b' ' not in s or b'_' in s:
-        continue
-    new = s[:23]
-    if new == s:
-        continue
-    start = m.start()
-    # Champ longueur GTA string juste avant le texte (4 octets LE).
-    if start >= 4:
-        struct.pack_into('<I', data, start - 4, len(new))
-    data[start:start+len(s)] = new + b'\x00' * (len(s) - len(new))
-    patched += 1
-    print(f"  -> frame raccourci ({len(s)}→{len(new)}): {s.decode()} → {new.decode()}")
-if any(b' ' in m.group() and b'_' not in m.group()
-       for m in re.finditer(rb'[\x20-\x7e]{24,}', bytes(data))):
-    raise SystemExit('ERREUR: noms de frames >23 chars restants dans copcarsf.dff')
-open(dst,'wb').write(data)
-print(f"  -> copcarsf.dff OK ({patched} frame(s) patché(s))")
-PY
+TMP_DFF="$WORK/copcarsf-patched.dff"
+TMP_DFF2="$WORK/copcarsf-lowered.dff"
+python3 "$SCRIPTS/patch-dff-samp.py" "$VS_SRC/copcarsf.dff" "$TMP_DFF"
+# Rabaissement propre : on descend TOUTE la carrosserie (portes, capot, pare-chocs,
+# phares, gyrophares light_em… tout ce qui est enfant direct de la racine) de -0.055,
+# roues exclues. Décaler seulement chassis_dummy laissait ces pièces « en suspend ».
+python3 "$SCRIPTS/lower-vehicle-body.py" "$TMP_DFF" "$TMP_DFF2" -0.055
+# Calage des coronas : ImVehFt dessine la corona d'urgence AU-DESSUS du point
+# light_em. On abaisse les ancres de la rampe de toit (light_em9-14) pour poser
+# la lumière pile sur la rampe (le reste de la carrosserie ne bouge pas).
+python3 "$SCRIPTS/lower-frames-z.py" "$TMP_DFF2" "$ML/Vapid Stanier Police LED/copcarsf.dff" -0.13 \
+  light_em9 light_em10 light_em11 light_em12 light_em13 light_em14
 cp -f "$VS_SRC/copcarsf.txd" "$ML/Vapid Stanier Police LED/"
 echo "  -> copcarsf.txd ($(du -h "$VS_SRC/copcarsf.txd" | awk '{print $1}'))"
 
-# 17) Proper Shaders → modloader/Proper Shaders/ (preset medium par défaut) ---
-# Incompatible avec Real Skybox (retiré). ReShade : reverse Z activé dans ReShade.ini.
-# SAMPGraphicRestore.asi (nom EXACT requis par ProperShaders) livré via la base.
-echo "=== Proper Shaders ==="
-PS_SRC="$MODS_SRC/Shaders/Proper Shaders"
-PS_PRESET="$MODS_SRC/Shaders/(presets)/(3a- medium - DEFAULT)/ProperShaders.ini"
-[[ -d "$PS_SRC" ]] || { echo "ERREUR: 'Shaders/Proper Shaders' introuvable dans mods-src" >&2; exit 1; }
-[[ -f "$PS_PRESET" ]] || { echo "ERREUR: preset Proper Shaders (3a medium) introuvable" >&2; exit 1; }
-cp -a "$PS_SRC" "$ML/Proper Shaders"
-cp -f "$PS_PRESET" "$ML/Proper Shaders/ProperShaders.ini"
-PF="$MODS_SRC/Shaders/(extras)/(fix proper fixes warning)/Proper Fixes/ProperFixes.asi"
-[[ -f "$PF" ]] && cp -f "$PF" "$STAGING/"
+# 16b) Vapid Torrence Police Las Venturas v2 (copcarvg / Police LV) ----------
+# Source : https://www.gtaall.com/gta-san-andreas/cars/156936-vapid-torrence-police-las-venturas-v2.html
+echo "=== Vapid Torrence Police LV (copcarvg) ==="
+TLV_SRC="$(find "$MODS_SRC" -maxdepth 1 -type d \( -iname 'vapid*torrence*police*lv*' -o -iname 'vapid torrence police lv' \) | head -1)"
+[[ -n "$TLV_SRC" ]] || { echo "ERREUR: dossier 'Vapid Torrence Police LV' introuvable dans mods-src" >&2; exit 1; }
+[[ -f "$TLV_SRC/copcarvg.dff" && -f "$TLV_SRC/copcarvg.txd" ]] || { echo "ERREUR: copcarvg.dff/txd introuvable dans $TLV_SRC" >&2; exit 1; }
+mkdir -p "$ML/Vapid Torrence Police LV"
+python3 "$SCRIPTS/patch-dff-samp.py" "$TLV_SRC/copcarvg.dff" "$ML/Vapid Torrence Police LV/copcarvg.dff"
+cp -f "$TLV_SRC/copcarvg.txd" "$ML/Vapid Torrence Police LV/"
+echo "  -> copcarvg.txd ($(du -h "$TLV_SRC/copcarvg.txd" | awk '{print $1}'))"
+
+# 16c) Vapid Stanier Unmarked Cruiser (copcarla / Police LS) ------------------
+# Source : https://www.gtaall.com/gta-san-andreas/cars/205992-vapid-stanier-unmarked-cruiser.html
+echo "=== Vapid Stanier Unmarked (copcarla) ==="
+SU_SRC="$(find "$MODS_SRC" -maxdepth 1 -type d \( -iname 'vapid*stanier*unmarked*' -o -iname 'vapid stanier unmarked' \) | head -1)"
+[[ -n "$SU_SRC" ]] || { echo "ERREUR: dossier 'Vapid Stanier Unmarked' introuvable dans mods-src" >&2; exit 1; }
+[[ -f "$SU_SRC/copcarla.dff" && -f "$SU_SRC/copcarla.txd" ]] || { echo "ERREUR: copcarla.dff/txd introuvable dans $SU_SRC" >&2; exit 1; }
+mkdir -p "$ML/Vapid Stanier Unmarked"
+python3 "$SCRIPTS/patch-dff-samp.py" "$SU_SRC/copcarla.dff" "$ML/Vapid Stanier Unmarked/copcarla.dff"
+cp -f "$SU_SRC/copcarla.txd" "$ML/Vapid Stanier Unmarked/"
+echo "  -> copcarla.txd ($(du -h "$SU_SRC/copcarla.txd" | awk '{print $1}'))"
+
+# 16d) GTA V HVY APC (swatvan / SWAT) -----------------------------------------
+# Source : https://www.gtaall.com/gta-san-andreas/cars/272540-gta-v-hvy-apc.html
+echo "=== HVY APC (swatvan) ==="
+APC_SRC="$(find "$MODS_SRC" -maxdepth 1 -type d \( -iname 'hvy*apc*' -o -iname 'hvy apc' \) | head -1)"
+[[ -n "$APC_SRC" ]] || { echo "ERREUR: dossier 'HVY APC' introuvable dans mods-src" >&2; exit 1; }
+[[ -f "$APC_SRC/swatvan.dff" && -f "$APC_SRC/swatvan.txd" ]] || { echo "ERREUR: swatvan.dff/txd introuvable dans $APC_SRC" >&2; exit 1; }
+mkdir -p "$ML/HVY APC"
+python3 "$SCRIPTS/patch-dff-samp.py" "$APC_SRC/swatvan.dff" "$ML/HVY APC/swatvan.dff"
+cp -f "$APC_SRC/swatvan.txd" "$ML/HVY APC/"
+echo "  -> swatvan.txd ($(du -h "$APC_SRC/swatvan.txd" | awk '{print $1}'))"
+
+# 16e) New Weapons Pack (modèles/textures armes) ------------------------------
+# Source : https://www.gtaall.com/gta-san-andreas/weapons/15673-new-weapons-pack.html
+# Compatible avec Next Gen Weapon Sounds (sons uniquement, pas de conflit DFF/TXD).
+echo "=== New Weapons Pack ==="
+NWP_SRC="$(find "$MODS_SRC" -maxdepth 1 -type d \( -iname 'new*weapons*pack*' -o -iname 'new weapons pack' \) | head -1)"
+[[ -n "$NWP_SRC" ]] || { echo "ERREUR: dossier 'New Weapons Pack' introuvable dans mods-src" >&2; exit 1; }
+NWP_COUNT="$(find "$NWP_SRC" -maxdepth 1 \( -iname '*.dff' -o -iname '*.txd' \) | wc -l)"
+[[ "$NWP_COUNT" -ge 10 ]] || { echo "ERREUR: New Weapons Pack incomplet ($NWP_COUNT fichiers)" >&2; exit 1; }
+mkdir -p "$ML/New Weapons Pack"
+cp -a "$NWP_SRC/." "$ML/New Weapons Pack/"
+echo "  -> $NWP_COUNT fichier(s) dff/txd"
+
+# 17) Proper Shaders autonome + preset GTRP -------------------------------
+# Le binaire n'est PAS inclus dans ce modpack. Le launcher télécharge l'archive
+# officielle, en vérifie le hash puis applique ce preset additionnel. Cette
+# séparation respecte la licence qui interdit tout reupload en modpack.
+echo "=== Proper Shaders (source officielle + preset GTRP) ==="
+ASSETS="$ROOT/assets"
+for asset in ProperShaders-GTRP.ini hd-paths.txt proper-shaders-source.json; do
+  [[ -f "$ASSETS/$asset" ]] || { echo "ERREUR: asset $asset absent" >&2; exit 1; }
+done
+mkdir -p "$ML/Proper Shaders"
+cp -f "$ASSETS/ProperShaders-GTRP.ini" "$ML/Proper Shaders/ProperShaders.ini"
+cp -f "$ASSETS/hd-paths.txt" "$STAGING/.gtrp-hd-paths"
+cp -f "$ASSETS/proper-shaders-source.json" "$STAGING/.gtrp-hd-component.json"
+echo "  -> archive officielle non réhébergée ; preset stable/SA-MP/teintes neutres"
+
+# 18) ImVehFt 2.1.1 → racine (gyrophares, clignotants, feux, saleté) ------------
+# Source : https://www.gtaall.com/gta-san-andreas/cleo/119689-improved-vehicle-features-211.html
+# .asi chargé par le loader vorbisFileLoader.dll. Données dans ImVehFt/ à la racine.
+# SAMP_fix=1 (compat SA-MP). Gyrophares 597 : le modèle est « IVF adapted » et
+# possède ses 14 frames light_em intégrées ; ImVehFt les anime automatiquement via
+# son éclairage d'urgence UNIVERSEL. AUCUN EML custom (un EML mal formé plaçait des
+# coronas parasites « en suspend »).
+echo "=== ImVehFt 2.1.1 ==="
+IVF_SRC="$(find "$MODS_SRC" -maxdepth 1 -type d -iname 'ImVehFt' | head -1)"
+[[ -n "$IVF_SRC" ]] || { echo "ERREUR: dossier 'ImVehFt' introuvable dans mods-src" >&2; exit 1; }
+[[ -f "$IVF_SRC/ImVehFt.asi" ]] || { echo "ERREUR: ImVehFt.asi introuvable dans $IVF_SRC" >&2; exit 1; }
+[[ -d "$IVF_SRC/ImVehFt" ]] || { echo "ERREUR: dossier données ImVehFt/ introuvable dans $IVF_SRC" >&2; exit 1; }
+cp -f "$IVF_SRC/ImVehFt.asi" "$STAGING/"
+cp -a "$IVF_SRC/ImVehFt" "$STAGING/"
+# Purge tout EML custom 597 (on s'appuie sur l'éclairage universel des light_em).
+rm -f "$STAGING/ImVehFt/eml/597.eml"
+grep -q '^SAMP_fix=1' "$STAGING/ImVehFt/ImVehFt.ini" || { echo "ERREUR: SAMP_fix=1 absent de ImVehFt.ini" >&2; exit 1; }
+echo "  -> ImVehFt.asi + ImVehFt/ (SAMP_fix=1, gyrophares 597 = light_em universels)"
 
 # --- Rapport de contrôle ----------------------------------------------------
 REPORT="$ROOT/modpack-work/build-report.txt"
@@ -201,7 +268,7 @@ REPORT="$ROOT/modpack-work/build-report.txt"
   find "$ML" -maxdepth 1 -mindepth 1 -type d -printf '  %f\n' | sort
   echo ""
   echo "--- Contrôles ---"
-  echo "  d3d9.dll racine : $(find "$STAGING" -maxdepth 1 -iname 'd3d9.dll' | wc -l) (attendu 1)"
+  echo "  anciens d3d9/ReShade/SkyGFX : $(find "$STAGING" -maxdepth 1 \( -iname 'd3d9.dll' -o -iname 'skygfx.asi' \) | wc -l) (attendu 0)"
   echo "  vorbisFileLoader.dll racine : $(find "$STAGING" -maxdepth 1 -iname 'vorbisFileLoader.dll' | wc -l) (attendu 1)"
   echo "  modloader.asi racine : $(find "$STAGING" -maxdepth 1 -iname 'modloader.asi' | wc -l) (attendu 1)"
   echo "  modloader/.data/plugins : $(find "$ML/.data/plugins" -iname 'std.*.dll' 2>/dev/null | wc -l) plugins (attendu >0)"
@@ -209,8 +276,9 @@ REPORT="$ROOT/modpack-work/build-report.txt"
   find "$ML" -iname 'timecyc*.dat' -printf '    %P\n' || true
   echo "  .asi supplémentaires dans modloader/ :"
   find "$ML" -iname '*.asi' -printf '    %P\n' || echo "    (aucun)"
-  echo "  LoadAllBinaryIPLs :"
-  grep -n 'LoadAllBinaryIPLs' "$STAGING/SALodLights.ini" | sed 's/^/    /' || true
+  echo "  source Proper Shaders : $(test -f "$STAGING/.gtrp-hd-component.json" && echo présente || echo ABSENTE)"
+  echo "  preset Proper Shaders : $(test -f "$ML/Proper Shaders/ProperShaders.ini" && echo présent || echo ABSENT)"
+  echo "  binaire ProperShaders.asi réhébergé : $(find "$STAGING" -iname 'ProperShaders.asi' | wc -l) (attendu 0)"
   echo ""
   echo "--- Comptage fichiers jeu (txd/dff/wav) ---"
   echo "  .txd : $(find "$ML" -iname '*.txd' | wc -l)   .dff : $(find "$ML" -iname '*.dff' | wc -l)   .wav : $(find "$ML" -iname '*.wav' | wc -l)"
@@ -232,36 +300,47 @@ SIZE=$(stat -c %s "$OUT"); SHA=$(sha256sum "$OUT" | awk '{print $1}')
 echo "version=$VERSION size=$SIZE sha256=$SHA"
 
 # --- Fichiers "config" différentiels ----------------------------------------
-# Ces petits fichiers texte (réglages ReShade) sont référencés individuellement
+# Ces petits fichiers texte (séparation HD, source officielle et preset) sont
+# référencés individuellement
 # dans "files". Le launcher compare leur SHA-256 local et ne re-télécharge QUE
 # ceux qui ont changé, SANS reprendre le bundle complet — à condition de ne pas
 # changer "version" (sinon le bundle prime). Chaque asset est nommé par son hash
 # (ex. ReShadePreset.<sha8>.ini) pour éviter tout cache CDN périmé au download.
 BASE_PUB_URL="https://github.com/Vans74/GTRP-Launcher/releases/download/modpack"
-CFG_FILES=("ReShade.ini" "ReShadePreset.ini")
+CFG_FILES=(
+  ".gtrp-hd-paths"
+  ".gtrp-hd-component.json"
+  "modloader/Proper Shaders/ProperShaders.ini"
+)
 
 # Nettoie les anciennes copies d'assets config avant régénération.
-rm -f "$ROOT"/modpack-work/ReShade.*.ini "$ROOT"/modpack-work/ReShadePreset.*.ini 2>/dev/null || true
+rm -f "$ROOT"/modpack-work/hd-paths.*.txt "$ROOT"/modpack-work/proper-shaders-source.*.json "$ROOT"/modpack-work/ProperShaders.*.ini 2>/dev/null || true
 
 CFG_SPECS=()   # "path_in_game|asset_name" pour l'étape d'upload
 for cf in "${CFG_FILES[@]}"; do
   src="$STAGING/$cf"
   [[ -f "$src" ]] || { echo "ERREUR: config $cf absente du staging" >&2; exit 1; }
   csha=$(sha256sum "$src" | awk '{print $1}')
-  cext="${cf##*.}"; cbase="${cf%.*}"
+  cname="$(basename "$cf")"
+  case "$cname" in
+    .gtrp-hd-paths) cbase="hd-paths"; cext="txt" ;;
+    .gtrp-hd-component.json) cbase="proper-shaders-source"; cext="json" ;;
+    *) cext="${cname##*.}"; cbase="${cname%.*}" ;;
+  esac
   asset="${cbase}.${csha:0:8}.${cext}"
   cp -f "$src" "$ROOT/modpack-work/$asset"
   CFG_SPECS+=("gtrp-assets/enb/$cf|$asset")
 done
 
+CFG_SPECS_JOINED="$(printf '%s;;' "${CFG_SPECS[@]}")"
 VERSION="$VERSION" SHA="$SHA" SIZE="$SIZE" BASE_PUB_URL="$BASE_PUB_URL" STAGING="$STAGING" \
-CFG_SPECS="${CFG_SPECS[*]}" python3 - "$ROOT/modpack-work/manifest.json" <<'PY'
+CFG_SPECS="$CFG_SPECS_JOINED" python3 - "$ROOT/modpack-work/manifest.json" <<'PY'
 import os, sys, json, hashlib
 out = sys.argv[1]
 base = os.environ["BASE_PUB_URL"]
 staging = os.environ["STAGING"]
 files = []
-for spec in os.environ["CFG_SPECS"].split():
+for spec in filter(None, os.environ["CFG_SPECS"].split(";;")):
     path_in_game, asset = spec.split("|")
     local = os.path.join(staging, path_in_game.split("gtrp-assets/enb/", 1)[1])
     data = open(local, "rb").read()

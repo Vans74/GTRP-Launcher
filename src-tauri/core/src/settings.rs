@@ -16,7 +16,8 @@ pub struct Settings {
     /// Chemin absolu vers samp.exe (déduit si absent).
     #[serde(default)]
     pub samp_path: Option<String>,
-    /// Active l'ENB GTRP (SA DirectX 3.0) au lancement.
+    /// Active uniquement le moteur et les effets graphiques HD au lancement.
+    /// Les modèles, skins, sons et contenus d'interface restent permanents.
     #[serde(default = "default_enhanced_graphics")]
     pub enhanced_graphics: bool,
 }
@@ -90,6 +91,17 @@ mod tests {
         let s = load(&dir);
         assert_eq!(s.nickname, "");
         assert!(s.gta_path.is_none());
+        assert!(s.enhanced_graphics);
+    }
+
+    #[test]
+    fn missing_graphics_field_defaults_to_enabled_but_explicit_false_is_preserved() {
+        let migrated: Settings = serde_json::from_str(r#"{"nickname":"Tester"}"#).unwrap();
+        assert!(migrated.enhanced_graphics);
+
+        let disabled: Settings =
+            serde_json::from_str(r#"{"nickname":"Tester","enhanced_graphics":false}"#).unwrap();
+        assert!(!disabled.enhanced_graphics);
     }
 
     #[test]

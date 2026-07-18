@@ -106,7 +106,12 @@ fn launch_game(app: AppHandle) -> Result<enb::EnbPrepareResult> {
 
     let enb_result = enb::prepare(Path::new(&install.root), s.enhanced_graphics)?;
 
-    launch::launch(&install, &s.nickname, config::SERVER_HOST, config::SERVER_PORT)?;
+    launch::launch(
+        &install,
+        &s.nickname,
+        config::SERVER_HOST,
+        config::SERVER_PORT,
+    )?;
 
     Ok(enb_result)
 }
@@ -137,11 +142,9 @@ async fn apply_updates(app: AppHandle) -> Result<()> {
         updater::apply_updates(&plan, Path::new(&gta_root), |p| {
             let _ = app_for_events.emit("update-progress", &p);
         })?;
-        // Redéploie les graphismes si le joueur les avait activés (sinon SALodLights
-        // et autres ASI restent absents de la racine après une mise à jour bundle).
-        if enhanced {
-            let _ = enb::prepare(Path::new(&gta_root), true)?;
-        }
+        // Redéploie toujours les contenus permanents après un bundle. Le booléen
+        // ne contrôle que le moteur graphique HD.
+        let _ = enb::prepare(Path::new(&gta_root), enhanced)?;
         let _ = app_for_events.emit("update-done", ());
         Ok::<(), LauncherError>(())
     })

@@ -10,6 +10,11 @@ légère (~5–10 Mo) et aux couleurs du serveur.
 - **Statut serveur en direct** (en ligne/hors ligne, joueurs, ping) via le protocole query SA-MP.
 - **Auto-updater du modpack** : téléchargement différentiel basé sur un `manifest.json`
   distant, avec vérification d'intégrité **SHA-256** et installation atomique.
+- **Graphismes HD optionnels** : le bouton, activé par défaut, ne contrôle que
+  Proper Shaders et les retouches de décor. Les véhicules, skins, armes, sons,
+  radar, interface et leur ASI loader restent toujours actifs. Proper Shaders
+  est téléchargé depuis sa source officielle, vérifié par SHA-256 et conservé
+  comme composant autonome ; seul le preset GTRP est publié avec le modpack.
 - **Préchargement artwork SA-MP** : synchronisation des DFF/TXD déclarés par le
   serveur dans le cache 0.3.DL (CRC + SHA-256, bundle initial puis différentiel).
 - **Vérification d'intégrité / anti-triche léger** : contrôle des fichiers attendus
@@ -48,7 +53,8 @@ launcher/
 ├─ src-tauri/
 │  ├─ src/lib.rs               # Couche Tauri : commandes exposées au frontend
 │  └─ core/                    # Crate "gtrp-core" : logique métier (SANS GUI, testable partout)
-│     └─ src/{query,updater,samp_cache,gta,launch,settings,news,config,error}.rs
+│     └─ src/{query,updater,enb,samp_cache,gta,launch,settings,news,config,error}.rs
+├─ assets/                     # Preset HD GTRP + descripteurs de déploiement
 ├─ tools/gen-manifest.mjs      # Générateur de manifest du modpack
 └─ .github/workflows/build.yml # CI : build de l'installeur Windows
 ```

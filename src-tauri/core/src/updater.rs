@@ -252,7 +252,7 @@ pub fn plan_updates(manifest: &Manifest, gta_root: &Path) -> Result<UpdatePlan> 
 
 /// Télécharge un fichier, vérifie son SHA-256, puis l'installe atomiquement.
 /// `on_bytes` est appelé à chaque bloc reçu avec le nombre d'octets du bloc.
-fn download_verify<F: FnMut(u64)>(
+pub(crate) fn download_verify<F: FnMut(u64)>(
     url: &str,
     dest: &Path,
     expected_sha: &str,

@@ -1,108 +1,452 @@
-//! Gestion des graphismes améliorés GTRP (ReShade + mods via modloader/ASI).
+//! Déploiement des contenus permanents GTRP et des graphismes HD optionnels.
 //!
-//! Les fichiers sont stockés dans `{gta_root}/gtrp-assets/enb/` (déployés via le
-//! modpack du launcher). Avant chaque lancement :
-//!   - graphismes activés  → copie récursive vers la racine du jeu ;
-//!   - graphismes désactivés → retrait des fichiers précédemment déployés.
+//! Le modpack est stocké dans `{gta_root}/gtrp-assets/enb/`. La plupart des
+//! contenus (modèles, skins, sons, interface, radar, modloader et ASI loader)
+//! sont toujours copiés dans le jeu. Seuls les chemins déclarés dans
+//! `.gtrp-hd-paths` dépendent du bouton « Graphismes HD ».
 //!
-//! Cas particulier de l'ASI loader (Ultimate ASI Loader) : sur GTA SA / SA-MP
-//! 0.3.DL, les `.asi` (modloader, radar, skygrad, Real Skybox…) ne se chargent de
-//! façon fiable que via un proxy `vorbisFile.dll`, PAS via `dinput8.dll`. Le
-//! modpack livre donc le loader sous un nom neutre (`vorbisFileLoader.dll`) et le
-//! launcher l'installe lui-même en `vorbisFile.dll`, en sauvegardant le
-//! `vorbisFile.dll` d'origine du jeu en `vorbisFileHooked.dll` (vers lequel le
-//! loader relaie les appels audio OGG). Ainsi chaque joueur obtient les ASI sans
-//! aucune manipulation manuelle. Le nom neutre évite qu'un ancien launcher (sans
-//! cette logique) n'écrase le `vorbisFile.dll` d'origine lors d'une simple copie.
+//! Proper Shaders reste un composant autonome : le launcher le télécharge
+//! directement depuis l'URL officielle décrite par `.gtrp-hd-component.json`,
+//! vérifie son SHA-256 et conserve sa licence. Le modpack GTRP ne réhéberge que
+//! le preset `.ini` additionnel.
 
 use crate::error::{LauncherError, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 
-/// Dossier relatif (dans le jeu) où le modpack dépose l'ENB en attente.
+/// Dossier relatif (dans le jeu) où le modpack dépose ses fichiers en attente.
 pub const ENB_STAGING_REL: &str = "gtrp-assets/enb";
 
-/// Fichier témoin : indique que l'ENB GTRP est actuellement actif dans le dossier du jeu.
+/// Inventaire du dernier déploiement géré par le launcher.
 pub const ENB_MARKER: &str = ".gtrp_enb_active";
 
-/// Nom neutre sous lequel le modpack livre l'Ultimate ASI Loader (non chargé
-/// automatiquement par le jeu ; c'est le launcher qui l'installe).
+/// Liste des chemins conditionnels au bouton Graphismes HD.
+pub const HD_PATHS_FILE: &str = ".gtrp-hd-paths";
+
+/// Source officielle du composant graphique autonome (Proper Shaders).
+pub const HD_COMPONENT_FILE: &str = ".gtrp-hd-component.json";
+
+/// Nom neutre sous lequel le modpack livre l'Ultimate ASI Loader.
 pub const LOADER_SRC_NAME: &str = "vorbisFileLoader.dll";
 
-/// Nom sous lequel le loader doit être installé pour charger les ASI de façon
-/// fiable sur GTA SA / SA-MP 0.3.DL.
+/// Nom sous lequel le loader doit être installé pour charger les ASI.
 pub const LOADER_TARGET_NAME: &str = "vorbisFile.dll";
 
-/// Sauvegarde du `vorbisFile.dll` d'origine du jeu (le loader y relaie l'audio OGG).
+/// Sauvegarde du `vorbisFile.dll` d'origine du jeu.
 pub const LOADER_BACKUP_NAME: &str = "vorbisFileHooked.dll";
 
-/// Fichiers Project2DFX (SALodLights) : les trois doivent être à la racine du jeu.
-/// Sans le `.dat` à côté du `.asi`, l'ASI Loader affiche l'erreur 126.
+/// Chemins graphiques historiques : ce fallback rend le nouveau launcher sûr
+/// même avant que le nouveau `.gtrp-hd-paths` soit reçu par le modpack.
+const DEFAULT_HD_PATHS: &[&str] = &[
+    "d3d9.dll",
+    "d3d9.dll.orig-splash",
+    "ReShade.ini",
+    "ReShadePreset.ini",
+    "reshade-shaders/",
+    "skygfx.asi",
+    "skygfx.ini",
+    "skygfx1.ini",
+    "skygfx2.ini",
+    "skygfx3.ini",
+    "skygrad.asi",
+    "SAMPGraphicRestore.asi",
+    "SALodLights.asi",
+    "SALodLights.dat",
+    "SALodLights.ini",
+    "neo/",
+    "data/colorcycle.dat",
+    "models/",
+    "modloader/OE Mod/",
+    "modloader/Vanilla + roads/",
+    "modloader/Proper Shaders/",
+];
+
 const PROJECT2DFX_FILES: &[&str] = &["SALodLights.asi", "SALodLights.dat", "SALodLights.ini"];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EnbPrepareResult {
+    /// Indique si le moteur graphique HD est actif (les contenus permanents sont
+    /// déployés dans les deux cas).
     pub applied: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HdComponentManifest {
+    name: String,
+    url: String,
+    sha256: String,
+    cache_key: String,
+    archive_prefix: String,
 }
 
 pub fn staging_dir(gta_root: &Path) -> PathBuf {
     gta_root.join(ENB_STAGING_REL)
 }
 
-/// Vérifie si le pack ENB a été déployé par le modpack.
 pub fn is_pack_installed(gta_root: &Path) -> bool {
     let staging = staging_dir(gta_root);
-    if !staging.is_dir() {
-        return false;
-    }
-    fs::read_dir(&staging)
-        .map(|mut entries| entries.any(|e| e.is_ok()))
-        .unwrap_or(false)
+    staging.is_dir()
+        && fs::read_dir(&staging)
+            .map(|mut entries| entries.any(|e| e.is_ok()))
+            .unwrap_or(false)
 }
 
-/// Active ou désactive l'ENB avant le lancement du jeu.
-pub fn prepare(gta_root: &Path, enabled: bool) -> Result<EnbPrepareResult> {
-    if enabled {
-        activate(gta_root)
-    } else {
-        deactivate(gta_root)?;
-        Ok(EnbPrepareResult {
-            applied: false,
-            message: "Graphismes améliorés désactivés.".into(),
-        })
-    }
-}
-
-fn activate(gta_root: &Path) -> Result<EnbPrepareResult> {
+/// Prépare le jeu avant chaque lancement. Les contenus permanents sont toujours
+/// actifs ; `hd_enabled` ne contrôle que les chemins graphiques déclarés.
+pub fn prepare(gta_root: &Path, hd_enabled: bool) -> Result<EnbPrepareResult> {
     let staging = staging_dir(gta_root);
     if !is_pack_installed(gta_root) {
         return Ok(EnbPrepareResult {
             applied: false,
-            message: "Pack ENB introuvable — lance d'abord une mise à jour du modpack.".into(),
+            message: "Pack GTRP introuvable — lance d'abord une mise à jour du modpack.".into(),
         });
     }
 
-    // Nettoie un déploiement précédent avant de recopier.
-    let _ = deactivate(gta_root);
+    let rules = load_hd_rules(&staging)?;
+    let component = load_hd_component_manifest(&staging)?;
+    let component_payload = if hd_enabled {
+        component
+            .as_ref()
+            .map(|manifest| ensure_hd_component(gta_root, manifest))
+            .transpose()?
+    } else {
+        component
+            .as_ref()
+            .map(|manifest| component_payload_dir(gta_root, manifest))
+            .filter(|path| path.is_dir())
+    };
+
+    // Retire le déploiement précédent (y compris un ancien pack monolithique),
+    // puis reconstruit l'état voulu de façon déterministe.
+    cleanup_previous_deployment(gta_root, &staging, component_payload.as_deref())?;
     purge_project2dfx_orphans(gta_root);
 
-    copy_dir_recursive(&staging, gta_root, &staging)?;
+    let mut deployed = Vec::new();
 
-    // Project2DFX : copie explicite + vérif (évite l'erreur ASI Loader 126 si .dat absent).
-    deploy_project2dfx(gta_root, &staging)?;
+    // Le composant officiel est copié d'abord ; le preset GTRP présent dans le
+    // staging est ensuite copié par-dessus.
+    if hd_enabled {
+        if let Some(payload) = component_payload.as_deref() {
+            let destination = gta_root.join("modloader").join("Proper Shaders");
+            copy_tree(payload, &destination, &destination, &mut deployed)?;
+        }
+    }
 
-    // Installe l'ASI loader en vorbisFile.dll (avec sauvegarde de l'original)
-    // pour que modloader et les autres .asi se chargent chez tous les joueurs.
+    copy_staging_files(
+        &staging,
+        gta_root,
+        &staging,
+        &rules,
+        hd_enabled,
+        &mut deployed,
+    )?;
+
+    if hd_enabled {
+        deploy_project2dfx(gta_root, &staging)?;
+    }
+
+    // Le loader et modloader restent actifs, même lorsque le moteur HD est coupé.
     install_asi_loader(gta_root, &staging)?;
+    write_deployment_marker(gta_root, hd_enabled, &deployed)?;
 
-    fs::write(gta_root.join(ENB_MARKER), b"1")?;
+    let message = if hd_enabled {
+        "Graphismes HD activés ; véhicules, skins, sons et interface chargés.".into()
+    } else {
+        "Graphismes HD désactivés ; véhicules, skins, sons et interface restent actifs.".into()
+    };
 
     Ok(EnbPrepareResult {
-        applied: true,
-        message: "Graphismes améliorés activés.".into(),
+        applied: hd_enabled,
+        message,
     })
+}
+
+fn load_hd_rules(staging: &Path) -> Result<Vec<String>> {
+    let mut rules = DEFAULT_HD_PATHS
+        .iter()
+        .map(|rule| normalize_rule(rule))
+        .collect::<Result<Vec<_>>>()?;
+
+    let path = staging.join(HD_PATHS_FILE);
+    if let Ok(content) = fs::read_to_string(path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let normalized = normalize_rule(line)?;
+            if !rules.iter().any(|rule| rule == &normalized) {
+                rules.push(normalized);
+            }
+        }
+    }
+    Ok(rules)
+}
+
+fn normalize_rule(rule: &str) -> Result<String> {
+    let had_trailing_slash = rule.trim().ends_with(['/', '\\']);
+    let normalized = rule
+        .trim()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .to_string();
+    validate_relative_str(&normalized)?;
+    let mut normalized = normalized.to_ascii_lowercase();
+    if had_trailing_slash && !normalized.ends_with('/') {
+        normalized.push('/');
+    }
+    Ok(normalized)
+}
+
+fn validate_relative_str(path: &str) -> Result<()> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains(':')
+        || Path::new(path)
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err(LauncherError::Integrity(format!(
+            "chemin de mod non autorisé : {path}"
+        )));
+    }
+    Ok(())
+}
+
+fn relative_string(path: &Path, base: &Path) -> Result<String> {
+    let rel = path
+        .strip_prefix(base)
+        .map_err(|_| LauncherError::Io("chemin de mod invalide".into()))?;
+    Ok(rel.to_string_lossy().replace('\\', "/"))
+}
+
+fn is_metadata_path(rel: &str) -> bool {
+    rel.eq_ignore_ascii_case(HD_PATHS_FILE) || rel.eq_ignore_ascii_case(HD_COMPONENT_FILE)
+}
+
+fn is_hd_path(rel: &str, rules: &[String]) -> bool {
+    let rel = rel.replace('\\', "/").to_ascii_lowercase();
+    rules.iter().any(|rule| {
+        if rule.ends_with('/') {
+            rel.starts_with(rule)
+        } else {
+            rel == *rule
+        }
+    })
+}
+
+fn copy_staging_files(
+    src: &Path,
+    game_root: &Path,
+    src_base: &Path,
+    rules: &[String],
+    hd_enabled: bool,
+    deployed: &mut Vec<String>,
+) -> Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            copy_staging_files(&path, game_root, src_base, rules, hd_enabled, deployed)?;
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+
+        let rel = relative_string(&path, src_base)?;
+        if is_metadata_path(&rel) || (!hd_enabled && is_hd_path(&rel, rules)) {
+            continue;
+        }
+        let dest = game_root.join(&rel);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&path, &dest)?;
+        deployed.push(rel);
+    }
+    Ok(())
+}
+
+/// Copie un composant déjà extrait et ajoute ses chemins relatifs à l'inventaire.
+fn copy_tree(
+    src: &Path,
+    dst: &Path,
+    inventory_base: &Path,
+    deployed: &mut Vec<String>,
+) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_tree(&path, &target, inventory_base, deployed)?;
+        } else if path.is_file() {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&path, &target)?;
+            // `inventory_base` pointe vers game_root/modloader/Proper Shaders.
+            let component_rel = target
+                .strip_prefix(inventory_base)
+                .map_err(|_| LauncherError::Io("chemin de composant HD invalide".into()))?;
+            let rel = Path::new("modloader")
+                .join("Proper Shaders")
+                .join(component_rel)
+                .to_string_lossy()
+                .replace('\\', "/");
+            deployed.push(rel);
+        }
+    }
+    Ok(())
+}
+
+fn load_hd_component_manifest(staging: &Path) -> Result<Option<HdComponentManifest>> {
+    let path = staging.join(HD_COMPONENT_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)?;
+    let manifest: HdComponentManifest = serde_json::from_str(&content)?;
+    validate_component_manifest(&manifest)?;
+    Ok(Some(manifest))
+}
+
+fn validate_component_manifest(manifest: &HdComponentManifest) -> Result<()> {
+    if manifest.name.trim().is_empty()
+        || !manifest.url.starts_with("https://")
+        || manifest.sha256.len() != 64
+        || !manifest.sha256.chars().all(|c| c.is_ascii_hexdigit())
+        || manifest.cache_key.is_empty()
+        || manifest.cache_key.starts_with('.')
+        || !manifest
+            .cache_key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(LauncherError::Integrity(
+            "description du composant HD invalide".into(),
+        ));
+    }
+    normalize_archive_prefix(&manifest.archive_prefix)?;
+    Ok(())
+}
+
+fn normalize_archive_prefix(prefix: &str) -> Result<String> {
+    let prefix = prefix
+        .trim()
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_string();
+    validate_relative_str(&prefix)?;
+    Ok(format!("{prefix}/"))
+}
+
+fn components_root(gta_root: &Path) -> PathBuf {
+    gta_root.join("gtrp-assets").join("components")
+}
+
+fn component_payload_dir(gta_root: &Path, manifest: &HdComponentManifest) -> PathBuf {
+    components_root(gta_root)
+        .join(&manifest.cache_key)
+        .join("content")
+}
+
+fn ensure_hd_component(gta_root: &Path, manifest: &HdComponentManifest) -> Result<PathBuf> {
+    let root = components_root(gta_root);
+    let downloads = root.join("downloads");
+    fs::create_dir_all(&downloads)?;
+    let archive_path = downloads.join(format!("{}.zip", manifest.cache_key));
+
+    let archive_valid = archive_path.is_file()
+        && crate::updater::sha256_file(&archive_path)
+            .map(|hash| hash.eq_ignore_ascii_case(&manifest.sha256))
+            .unwrap_or(false);
+    if !archive_valid {
+        let _ = fs::remove_file(&archive_path);
+        crate::updater::download_verify(&manifest.url, &archive_path, &manifest.sha256, |_| {})?;
+    }
+
+    let component_root = root.join(&manifest.cache_key);
+    let payload = component_root.join("content");
+    let ready_marker = component_root.join(".source_sha256");
+    let ready = fs::read_to_string(&ready_marker)
+        .map(|hash| hash.trim().eq_ignore_ascii_case(&manifest.sha256))
+        .unwrap_or(false)
+        && payload.is_dir();
+    if ready {
+        return Ok(payload);
+    }
+
+    if component_root.exists() {
+        fs::remove_dir_all(&component_root)?;
+    }
+    fs::create_dir_all(&payload)?;
+    fs::create_dir_all(component_root.join("license"))?;
+
+    let file = fs::File::open(&archive_path)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| {
+        LauncherError::Integrity(format!("archive {} invalide : {e}", manifest.name))
+    })?;
+    let prefix = normalize_archive_prefix(&manifest.archive_prefix)?;
+    let mut extracted_files = 0usize;
+
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|e| LauncherError::Integrity(format!("lecture {} : {e}", manifest.name)))?;
+        let name = entry.name().replace('\\', "/");
+
+        if let Some(rel) = name.strip_prefix(&prefix) {
+            if rel.is_empty() {
+                continue;
+            }
+            validate_relative_str(rel.trim_end_matches('/'))?;
+            let destination = payload.join(rel);
+            if entry.is_dir() || name.ends_with('/') {
+                fs::create_dir_all(&destination)?;
+            } else {
+                if let Some(parent) = destination.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut out = fs::File::create(&destination)?;
+                std::io::copy(&mut entry, &mut out)?;
+                out.flush()?;
+                extracted_files += 1;
+            }
+            continue;
+        }
+
+        // Conserve les textes d'origine à côté du cache, sans les injecter dans
+        // la racine du jeu ni les altérer.
+        let base_name = Path::new(&name).file_name().and_then(|v| v.to_str());
+        if matches!(
+            base_name,
+            Some("License.txt" | "Readme (or die).txt" | "Third Party.txt")
+        ) && !entry.is_dir()
+        {
+            let destination = component_root.join("license").join(base_name.unwrap());
+            let mut out = fs::File::create(destination)?;
+            std::io::copy(&mut entry, &mut out)?;
+            out.flush()?;
+        }
+    }
+
+    if extracted_files == 0 {
+        let _ = fs::remove_dir_all(&component_root);
+        return Err(LauncherError::Integrity(format!(
+            "{} ne contient aucun fichier sous {}",
+            manifest.name, prefix
+        )));
+    }
+
+    fs::write(&ready_marker, manifest.sha256.as_bytes())?;
+    Ok(payload)
 }
 
 /// Compare deux fichiers octet par octet (taille puis contenu).
@@ -116,105 +460,128 @@ fn files_equal(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Installe l'Ultimate ASI Loader en `vorbisFile.dll`, en préservant le
-/// `vorbisFile.dll` d'origine du jeu sous `vorbisFileHooked.dll`.
 fn install_asi_loader(gta_root: &Path, staging: &Path) -> Result<()> {
     let src = staging.join(LOADER_SRC_NAME);
     if !src.is_file() {
-        // Le modpack ne fournit pas de loader : rien à faire.
         return Ok(());
     }
 
     let target = gta_root.join(LOADER_TARGET_NAME);
     let backup = gta_root.join(LOADER_BACKUP_NAME);
-
-    // Sauvegarde unique du vorbisFile.dll d'origine (jamais écraser une sauvegarde
-    // existante, et ne pas sauvegarder notre propre loader).
     if !backup.exists() && target.is_file() && !files_equal(&target, &src) {
         fs::rename(&target, &backup)?;
     }
-
     fs::copy(&src, &target)?;
     Ok(())
 }
 
-/// Retire notre ASI loader et restaure le `vorbisFile.dll` d'origine du jeu.
 fn uninstall_asi_loader(gta_root: &Path, staging: &Path) {
     let src = staging.join(LOADER_SRC_NAME);
     let target = gta_root.join(LOADER_TARGET_NAME);
     let backup = gta_root.join(LOADER_BACKUP_NAME);
 
-    // Ne supprime vorbisFile.dll que si c'est bien notre loader (ou si une
-    // sauvegarde de l'original existe, prête à être restaurée).
     if target.is_file() {
         let is_ours = src.is_file() && files_equal(&target, &src);
         if is_ours || backup.is_file() {
             let _ = fs::remove_file(&target);
         }
     }
-
-    // Restaure l'original s'il avait été sauvegardé.
     if backup.is_file() && !target.exists() {
         let _ = fs::rename(&backup, &target);
     }
 }
 
-/// Retire proprement un déploiement ENB précédent du dossier du jeu.
-/// Utilisé par l'updater avant d'installer un nouveau modpack, pour éviter
-/// que d'anciens fichiers (ex. ancien pack ENB) ne subsistent dans le jeu.
 pub fn undeploy(gta_root: &Path) -> Result<()> {
-    deactivate(gta_root)
+    let staging = staging_dir(gta_root);
+    let component = load_hd_component_manifest(&staging)
+        .ok()
+        .flatten()
+        .map(|manifest| component_payload_dir(gta_root, &manifest))
+        .filter(|path| path.is_dir());
+    cleanup_previous_deployment(gta_root, &staging, component.as_deref())
 }
 
-fn deactivate(gta_root: &Path) -> Result<()> {
+fn cleanup_previous_deployment(
+    gta_root: &Path,
+    staging: &Path,
+    component_payload: Option<&Path>,
+) -> Result<()> {
     let marker = gta_root.join(ENB_MARKER);
     if !marker.is_file() {
         return Ok(());
     }
 
-    let staging = staging_dir(gta_root);
-    if staging.is_dir() {
-        remove_staged_files(&staging, gta_root, &staging)?;
-        purge_project2dfx_orphans(gta_root);
-        // Restaure le vorbisFile.dll d'origine (retire notre loader).
-        uninstall_asi_loader(gta_root, &staging);
+    let mut inventory_found = false;
+    if let Ok(content) = fs::read_to_string(&marker) {
+        for line in content.lines() {
+            let Some(rel) = line.strip_prefix("file=") else {
+                continue;
+            };
+            validate_relative_str(rel)?;
+            let target = gta_root.join(rel);
+            if target.is_file() {
+                let _ = fs::remove_file(&target);
+            }
+            inventory_found = true;
+        }
     }
 
+    // Migration depuis le marqueur v1 (« 1 »), sans inventaire.
+    if !inventory_found {
+        if staging.is_dir() {
+            remove_tree_targets(staging, gta_root, staging)?;
+        }
+        if let Some(payload) = component_payload {
+            let destination = gta_root.join("modloader").join("Proper Shaders");
+            remove_tree_targets(payload, &destination, payload)?;
+        }
+    }
+
+    purge_project2dfx_orphans(gta_root);
+    uninstall_asi_loader(gta_root, staging);
     let _ = fs::remove_file(marker);
     Ok(())
 }
 
-/// Copie récursivement `src` vers `dst_root`, en conservant les chemins relatifs à `src`.
-fn copy_dir_recursive(src: &Path, dst_root: &Path, src_base: &Path) -> Result<()> {
+fn write_deployment_marker(gta_root: &Path, hd_enabled: bool, deployed: &[String]) -> Result<()> {
+    let mut lines = String::from("version=2\n");
+    lines.push_str(if hd_enabled { "hd=1\n" } else { "hd=0\n" });
+    for rel in deployed {
+        validate_relative_str(rel)?;
+        lines.push_str("file=");
+        lines.push_str(rel);
+        lines.push('\n');
+    }
+    fs::write(gta_root.join(ENB_MARKER), lines)?;
+    Ok(())
+}
+
+fn remove_tree_targets(src: &Path, dst_root: &Path, src_base: &Path) -> Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let path = entry.path();
         let rel = path
             .strip_prefix(src_base)
-            .map_err(|_| LauncherError::Io("chemin ENB invalide".into()))?;
-        let dest = dst_root.join(rel);
-
+            .map_err(|_| LauncherError::Io("chemin de mod invalide".into()))?;
+        let target = dst_root.join(rel);
         if path.is_dir() {
-            fs::create_dir_all(&dest)?;
-            copy_dir_recursive(&path, dst_root, src_base)?;
-        } else if path.is_file() {
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)?;
+            remove_tree_targets(&path, dst_root, src_base)?;
+            if target.is_dir() {
+                let _ = fs::remove_dir(&target);
             }
-            fs::copy(&path, &dest)?;
+        } else if path.is_file() && target.is_file() {
+            let _ = fs::remove_file(&target);
         }
     }
     Ok(())
 }
 
-/// Retire d'éventuels restes Project2DFX (ex. .asi sans .dat d'une ancienne install).
 fn purge_project2dfx_orphans(gta_root: &Path) {
     for name in PROJECT2DFX_FILES {
         let _ = fs::remove_file(gta_root.join(name));
     }
 }
 
-/// Déploie Project2DFX à la racine du jeu si présent dans le staging.
 fn deploy_project2dfx(gta_root: &Path, staging: &Path) -> Result<()> {
     if !staging.join("SALodLights.asi").is_file() {
         return Ok(());
@@ -223,38 +590,15 @@ fn deploy_project2dfx(gta_root: &Path, staging: &Path) -> Result<()> {
         let src = staging.join(name);
         if !src.is_file() {
             return Err(LauncherError::Other(format!(
-                "Project2DFX incomplet dans le modpack : {name} manquant dans gtrp-assets/enb/"
+                "Project2DFX incomplet dans le modpack : {name} manquant"
             )));
         }
         let dst = gta_root.join(name);
         fs::copy(&src, &dst)?;
         if !dst.is_file() {
             return Err(LauncherError::Other(format!(
-                "Échec du déploiement de Project2DFX : {name} introuvable dans le dossier du jeu"
+                "Échec du déploiement de Project2DFX : {name}"
             )));
-        }
-    }
-    Ok(())
-}
-
-/// Supprime uniquement les fichiers/dossiers correspondant au contenu du staging ENB.
-fn remove_staged_files(staging: &Path, game_root: &Path, staging_base: &Path) -> Result<()> {
-    for entry in fs::read_dir(staging)? {
-        let entry = entry?;
-        let path = entry.path();
-        let rel = path
-            .strip_prefix(staging_base)
-            .map_err(|_| LauncherError::Io("chemin ENB invalide".into()))?;
-        let target = game_root.join(rel);
-
-        if path.is_dir() {
-            remove_staged_files(&path, game_root, staging_base)?;
-            // Supprime le dossier s'il est vide ou ne contient plus que des fichiers ENB.
-            if target.is_dir() {
-                let _ = fs::remove_dir(&target);
-            }
-        } else if path.is_file() && target.is_file() {
-            let _ = fs::remove_file(&target);
         }
     }
     Ok(())
@@ -271,98 +615,169 @@ mod tests {
         d
     }
 
-    #[test]
-    fn activate_and_deactivate_roundtrip() {
-        let game = tmp("roundtrip");
-        let staging = staging_dir(&game);
-        fs::create_dir_all(staging.join("enbseries")).unwrap();
-        fs::write(staging.join("d3d9.dll"), b"fake-enb").unwrap();
-        fs::write(staging.join("enbseries/test.fx"), b"shader").unwrap();
+    fn create_split_pack(game: &Path) -> PathBuf {
+        let staging = staging_dir(game);
+        fs::create_dir_all(staging.join("modloader/Vehicles")).unwrap();
+        fs::write(staging.join("d3d9.dll"), b"fake-hd").unwrap();
+        fs::write(staging.join("modloader/Vehicles/car.dff"), b"always").unwrap();
+        fs::write(staging.join(HD_PATHS_FILE), b"d3d9.dll\n").unwrap();
+        staging
+    }
 
-        let r = prepare(&game, true).unwrap();
-        assert!(r.applied);
+    #[test]
+    fn hd_toggle_keeps_permanent_content_active() {
+        let game = tmp("split");
+        let staging = create_split_pack(&game);
+
+        let enabled = prepare(&game, true).unwrap();
+        assert!(enabled.applied);
         assert!(game.join("d3d9.dll").is_file());
-        assert!(game.join("enbseries/test.fx").is_file());
-        assert!(game.join(ENB_MARKER).is_file());
+        assert!(game.join("modloader/Vehicles/car.dff").is_file());
 
-        let r2 = prepare(&game, false).unwrap();
-        assert!(!r2.applied);
+        let disabled = prepare(&game, false).unwrap();
+        assert!(!disabled.applied);
         assert!(!game.join("d3d9.dll").exists());
+        assert!(game.join("modloader/Vehicles/car.dff").is_file());
+        assert!(game.join(ENB_MARKER).is_file());
+        assert!(!game.join(HD_PATHS_FILE).exists());
+
+        undeploy(&game).unwrap();
+        assert!(!game.join("modloader/Vehicles/car.dff").exists());
         assert!(!game.join(ENB_MARKER).exists());
-        // Le staging reste intact.
-        assert!(staging.join("d3d9.dll").is_file());
-
+        assert!(staging.join("modloader/Vehicles/car.dff").is_file());
         let _ = fs::remove_dir_all(&game);
     }
 
     #[test]
-    fn activate_without_pack_is_non_fatal() {
+    fn prepare_without_pack_is_non_fatal() {
         let game = tmp("nopack");
-        let r = prepare(&game, true).unwrap();
-        assert!(!r.applied);
+        let result = prepare(&game, true).unwrap();
+        assert!(!result.applied);
         let _ = fs::remove_dir_all(&game);
     }
 
     #[test]
-    fn project2dfx_deploys_trio_to_game_root() {
+    fn project2dfx_is_hd_only() {
         let game = tmp("p2dfx");
-        let staging = staging_dir(&game);
-        fs::create_dir_all(&staging).unwrap();
-        fs::write(staging.join("d3d9.dll"), b"reshade").unwrap();
-        fs::write(staging.join("SALodLights.asi"), b"asi").unwrap();
-        fs::write(staging.join("SALodLights.dat"), b"dat").unwrap();
-        fs::write(staging.join("SALodLights.ini"), b"ini").unwrap();
+        let staging = create_split_pack(&game);
+        for (name, body) in [
+            ("SALodLights.asi", b"asi"),
+            ("SALodLights.dat", b"dat"),
+            ("SALodLights.ini", b"ini"),
+        ] {
+            fs::write(staging.join(name), body).unwrap();
+        }
 
-        let r = prepare(&game, true).unwrap();
-        assert!(r.applied);
+        prepare(&game, true).unwrap();
         assert!(game.join("SALodLights.asi").is_file());
-        assert!(game.join("SALodLights.dat").is_file());
-        assert!(game.join("SALodLights.ini").is_file());
-
+        prepare(&game, false).unwrap();
+        assert!(!game.join("SALodLights.asi").exists());
         let _ = fs::remove_dir_all(&game);
     }
 
     #[test]
-    fn asi_loader_backup_and_restore_roundtrip() {
+    fn asi_loader_stays_active_until_full_undeploy() {
         let game = tmp("loader");
-        let staging = staging_dir(&game);
-        fs::create_dir_all(&staging).unwrap();
-        // Loader livré par le modpack (nom neutre) + un fichier ENB quelconque.
+        let staging = create_split_pack(&game);
         fs::write(staging.join(LOADER_SRC_NAME), b"ULTIMATE-ASI-LOADER").unwrap();
-        fs::write(staging.join("d3d9.dll"), b"reshade").unwrap();
-        // vorbisFile.dll d'origine du jeu (contenu différent du loader).
         fs::write(game.join(LOADER_TARGET_NAME), b"ORIGINAL-VORBIS-AUDIO").unwrap();
 
-        // Activation : l'original est sauvegardé, le loader prend sa place.
-        let r = prepare(&game, true).unwrap();
-        assert!(r.applied);
-        assert!(game.join(LOADER_BACKUP_NAME).is_file());
+        prepare(&game, true).unwrap();
         assert_eq!(
             fs::read(game.join(LOADER_TARGET_NAME)).unwrap(),
             b"ULTIMATE-ASI-LOADER"
         );
+        prepare(&game, false).unwrap();
         assert_eq!(
-            fs::read(game.join(LOADER_BACKUP_NAME)).unwrap(),
-            b"ORIGINAL-VORBIS-AUDIO"
+            fs::read(game.join(LOADER_TARGET_NAME)).unwrap(),
+            b"ULTIMATE-ASI-LOADER"
         );
+        assert!(game.join(LOADER_BACKUP_NAME).is_file());
 
-        // Ré-activation : ne doit PAS sauvegarder le loader par-dessus la sauvegarde.
-        let r2 = prepare(&game, true).unwrap();
-        assert!(r2.applied);
-        assert_eq!(
-            fs::read(game.join(LOADER_BACKUP_NAME)).unwrap(),
-            b"ORIGINAL-VORBIS-AUDIO"
-        );
-
-        // Désactivation : l'original est restauré, le loader retiré.
-        let r3 = prepare(&game, false).unwrap();
-        assert!(!r3.applied);
+        undeploy(&game).unwrap();
         assert!(!game.join(LOADER_BACKUP_NAME).exists());
         assert_eq!(
             fs::read(game.join(LOADER_TARGET_NAME)).unwrap(),
             b"ORIGINAL-VORBIS-AUDIO"
         );
+        let _ = fs::remove_dir_all(&game);
+    }
 
+    #[test]
+    fn official_component_is_verified_extracted_and_hd_only() {
+        let game = tmp("component");
+        let staging = create_split_pack(&game);
+        fs::create_dir_all(staging.join("modloader/Proper Shaders")).unwrap();
+        fs::write(
+            staging.join("modloader/Proper Shaders/ProperShaders.ini"),
+            b"GTRP-PRESET",
+        )
+        .unwrap();
+
+        let downloads = components_root(&game).join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        let archive_path = downloads.join("proper-test.zip");
+        let archive_file = fs::File::create(&archive_path).unwrap();
+        let mut archive = zip::ZipWriter::new(archive_file);
+        archive
+            .start_file(
+                "Proper Shaders/ProperShaders.asi",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        archive.write_all(b"OFFICIAL-BINARY").unwrap();
+        archive
+            .start_file(
+                "Proper Shaders/ProperShaders.ini",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        archive.write_all(b"UPSTREAM-PRESET").unwrap();
+        archive
+            .start_file("License.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"UPSTREAM-LICENSE").unwrap();
+        archive.finish().unwrap();
+
+        let sha = crate::updater::sha256_file(&archive_path).unwrap();
+        let descriptor = serde_json::json!({
+            "name": "Proper test",
+            "url": "https://invalid.example/proper.zip",
+            "sha256": sha,
+            "cache_key": "proper-test",
+            "archive_prefix": "Proper Shaders/"
+        });
+        fs::write(
+            staging.join(HD_COMPONENT_FILE),
+            serde_json::to_vec_pretty(&descriptor).unwrap(),
+        )
+        .unwrap();
+
+        prepare(&game, true).unwrap();
+        assert_eq!(
+            fs::read(game.join("modloader/Proper Shaders/ProperShaders.asi")).unwrap(),
+            b"OFFICIAL-BINARY"
+        );
+        // Le preset additionnel GTRP doit gagner sur le preset de l'archive.
+        assert_eq!(
+            fs::read(game.join("modloader/Proper Shaders/ProperShaders.ini")).unwrap(),
+            b"GTRP-PRESET"
+        );
+        assert_eq!(
+            fs::read(components_root(&game).join("proper-test/license/License.txt")).unwrap(),
+            b"UPSTREAM-LICENSE"
+        );
+
+        prepare(&game, false).unwrap();
+        assert!(!game
+            .join("modloader/Proper Shaders/ProperShaders.asi")
+            .exists());
+        assert!(!game
+            .join("modloader/Proper Shaders/ProperShaders.ini")
+            .exists());
+        assert!(game.join("modloader/Vehicles/car.dff").is_file());
+        // Le cache officiel est conservé pour une réactivation instantanée.
+        assert!(archive_path.is_file());
         let _ = fs::remove_dir_all(&game);
     }
 }

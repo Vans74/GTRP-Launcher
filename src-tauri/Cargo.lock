@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "gtrp-core"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "crc32fast",
  "hex",
@@ -1647,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "gtrp-launcher"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "gtrp-core",
  "log",

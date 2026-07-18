@@ -1,0 +1,6 @@
+# Seuls ces chemins dépendent du bouton « Graphismes HD ».
+# Tout autre fichier du staging reste actif en permanence.
+SAMPGraphicRestore.asi
+modloader/Proper Shaders/
+modloader/Vanilla + roads/
+modloader/OE Mod/
