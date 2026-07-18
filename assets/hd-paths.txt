@@ -1,20 +1,10 @@
 # Seuls ces chemins dépendent du bouton « Graphismes HD ».
 # Tout autre fichier du staging reste actif en permanence.
-SAMPGraphicRestore.asi
 d3d9.dll
-enblocal.ini
-enbseries.ini
-enbseries/
-enbbloom.fx
-enbdepthoffield.fx
-enbeffect.fx
-enbeffectprepass.fx
-enbenvmap.fx
-enblens.fx
-enblighting.fx
-enbsky.fx
-enbunderwater.fx
-enbvehicle.fx
-enbwater.fx
+ReShade.ini
+ReShadePreset.ini
+GTRP-HD.ini
+reshade-shaders/
+SAMPGraphicRestore.asi
 modloader/Vanilla + roads/
 modloader/OE Mod/

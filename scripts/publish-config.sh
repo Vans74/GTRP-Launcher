@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Publie UNIQUEMENT les fichiers de config ENB en différentiel, sans
+# Publie UNIQUEMENT les fichiers de config ReShade en différentiel, sans
 # reconstruire ni ré-uploader le bundle complet (320 Mo).
 #
 # Principe : ces petits fichiers sont référencés dans "files" du manifeste. Le
 # launcher compare leur SHA-256 local et ne télécharge QUE ceux qui ont changé.
 # Sans changement de version, aucun bundle. Pour un patch avec bump de version,
 # utiliser publish-patch.sh (bundle_required=false, launcher 0.1.11+).
-# fichier comme asset nommé par son hash (ex. enbseries.<sha8>.ini) pour
+# fichier comme asset nommé par son hash (ex. GTRP-HD.<sha8>.ini) pour
 # éviter tout cache CDN périmé, puis on patche le manifeste live.
 #
 # Usage :
@@ -23,8 +23,8 @@ SRC_DIR="$ROOT/modpack-work/graphics-base/gtrp-assets/enb"
 CFG_FILES=(
   ".gtrp-hd-paths"
   ".gtrp-hd-component.json"
-  "enblocal.ini"
-  "enbseries.ini"
+  "ReShade.ini"
+  "GTRP-HD.ini"
 )
 
 if [[ -z "${GTRP_GH_TOKEN:-}" ]]; then
@@ -51,7 +51,7 @@ for cf in "${CFG_FILES[@]}"; do
   name="$(basename "$cf")"
   case "$name" in
     .gtrp-hd-paths) base="hd-paths"; ext="txt" ;;
-    .gtrp-hd-component.json) base="enb-source"; ext="json" ;;
+    .gtrp-hd-component.json) base="reshade-source"; ext="json" ;;
     *) ext="${name##*.}"; base="${name%.*}" ;;
   esac
   asset="${base}.${sha:0:8}.${ext}"

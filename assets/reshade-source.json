@@ -1,0 +1,51 @@
+{
+  "components": [
+    {
+      "kind": "installer",
+      "name": "ReShade 6.7.3 officiel",
+      "url": "https://reshade.me/downloads/ReShade_Setup_6.7.3.exe",
+      "sha256": "56791FD065358E899C581EBEFE2AD871399B7C7AE83FB85E1154C08A75A44147",
+      "cache_key": "reshade-official-v6.7.3",
+      "arguments": ["{gta_exe}", "--api", "d3d9", "--headless"],
+      "outputs": [
+        {
+          "path": "d3d9.dll",
+          "sha256": "B63DF921946967D2CD8DDB1BF8A5F66B4F3C9B269A5F4EA8BA49B6DBA330658B"
+        }
+      ],
+      "managed_paths": ["d3d9.dll", "ReShade.ini", "ReShadePreset.ini"]
+    },
+    {
+      "kind": "archive",
+      "name": "ReShade shaders legacy épinglés",
+      "url": "https://codeload.github.com/crosire/reshade-shaders/zip/bcb5ba54199f4455026dd8ba66dc1b74461d3152",
+      "sha256": "99A05C4273E42D6DE50E4509C66CAF81C0045BFCE2368BFBDF3B7812714306A1",
+      "cache_key": "reshade-shaders-legacy-bcb5ba54",
+      "archive_prefix": "reshade-shaders-bcb5ba54199f4455026dd8ba66dc1b74461d3152",
+      "destination": "reshade-shaders",
+      "include": [
+        "Shaders/AdaptiveSharpen.fx",
+        "Shaders/Bloom.fx",
+        "Shaders/Colourfulness.fx",
+        "Shaders/FilmicPass.fx",
+        "Shaders/LevelsPlus.fx",
+        "Textures/LensDB.png",
+        "Textures/LensSprite.png"
+      ]
+    },
+    {
+      "kind": "archive",
+      "name": "ReShade shaders slim épinglés",
+      "url": "https://codeload.github.com/crosire/reshade-shaders/zip/6db142b4b1a05c764222e5b0bd9a644b7ccfe1dc",
+      "sha256": "12D082C8AB1DBCB5E221E1B6116A0343F3182EE517F09BB966B117ACC7635312",
+      "cache_key": "reshade-shaders-slim-6db142b4",
+      "archive_prefix": "reshade-shaders-6db142b4b1a05c764222e5b0bd9a644b7ccfe1dc",
+      "destination": "reshade-shaders",
+      "include": [
+        "Shaders/Deband.fx",
+        "Shaders/ReShade.fxh",
+        "Shaders/ReShadeUI.fxh"
+      ]
+    }
+  ]
+}

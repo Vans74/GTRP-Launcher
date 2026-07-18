@@ -11,10 +11,11 @@ légère (~5–10 Mo) et aux couleurs du serveur.
 - **Auto-updater du modpack** : téléchargement différentiel basé sur un `manifest.json`
   distant, avec vérification d'intégrité **SHA-256** et installation atomique.
 - **Graphismes HD optionnels** : le bouton, activé par défaut, ne contrôle que
-  ENBSeries 0.430 et les retouches de décor. Les véhicules, skins, armes, sons,
-  radar, interface et leur ASI loader restent toujours actifs. Le pack ENB
-  source est téléchargé directement, vérifié par SHA-256 puis extrait sur liste
-  blanche ; seuls les réglages neutres GTRP sont livrés avec le modpack.
+  ReShade 6.7.3 et les retouches de décor. Les véhicules, skins, armes, sons,
+  radar, interface et leur ASI loader restent toujours actifs. Le moteur et les
+  shaders sont téléchargés depuis leurs sources officielles, vérifiés par
+  SHA-256 puis filtrés ; seuls les réglages neutres GTRP sont livrés avec le
+  modpack.
 - **Préchargement artwork SA-MP** : synchronisation des DFF/TXD déclarés par le
   serveur dans le cache 0.3.DL (CRC + SHA-256, bundle initial puis différentiel).
 - **Vérification d'intégrité / anti-triche léger** : contrôle des fichiers attendus

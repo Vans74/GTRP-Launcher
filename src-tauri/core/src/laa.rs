@@ -1,7 +1,7 @@
 //! Patch « Large Address Aware » (4 Go) sur gta_sa.exe.
 //!
 //! gta_sa.exe est un exécutable 32 bits qui, par défaut, ne peut adresser que
-//! ~2 Go de mémoire. Avec un pack graphique lourd (ENB / SkyGFX / ReShade /
+//! ~2 Go de mémoire. Avec un pack graphique lourd (ReShade / SkyGFX /
 //! ImVehFt + textures HD) ET le streaming d'objets du serveur — notamment
 //! `SetObjectMaterialText`, qui fait créer au jeu des polices GDI (Arial,
 //! Trebuchet MS, Webdings…) —, on s'approche de cette limite. Les allocations

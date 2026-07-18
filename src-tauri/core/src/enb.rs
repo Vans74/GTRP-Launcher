@@ -5,16 +5,20 @@
 //! sont toujours copiés dans le jeu. Seuls les chemins déclarés dans
 //! `.gtrp-hd-paths` dépendent du bouton « Graphismes HD ».
 //!
-//! Le moteur ENB reste un composant autonome : le launcher le télécharge depuis
-//! l'URL décrite par `.gtrp-hd-component.json`, vérifie son SHA-256 et n'extrait
-//! que les fichiers explicitement autorisés. Le modpack GTRP ne réhéberge que
-//! ses réglages additionnels.
+//! ReShade et ses shaders restent des composants autonomes : le launcher les
+//! télécharge depuis les URL décrites par `.gtrp-hd-component.json`, vérifie
+//! chaque SHA-256 et n'extrait que les fichiers explicitement autorisés. Le
+//! modpack GTRP ne réhéberge que ses réglages additionnels.
 
 use crate::error::{LauncherError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
+#[cfg(windows)]
+use std::process::Command;
 
 /// Dossier relatif (dans le jeu) où le modpack dépose ses fichiers en attente.
 pub const ENB_STAGING_REL: &str = "gtrp-assets/enb";
@@ -44,6 +48,7 @@ const DEFAULT_HD_PATHS: &[&str] = &[
     "d3d9.dll.orig-splash",
     "ReShade.ini",
     "ReShadePreset.ini",
+    "GTRP-HD.ini",
     "reshade-shaders/",
     "skygfx.asi",
     "skygfx.ini",
@@ -79,9 +84,10 @@ const DEFAULT_HD_PATHS: &[&str] = &[
 
 const PROJECT2DFX_FILES: &[&str] = &["SALodLights.asi", "SALodLights.dat", "SALodLights.ini"];
 
-/// Fichiers de réglage/log qu'ENB peut générer à l'exécution et qui ne figurent
-/// donc pas nécessairement dans l'inventaire écrit avant le lancement du jeu.
+/// Fichiers de réglage/log que les anciens moteurs ou ReShade peuvent générer à
+/// l'exécution et qui ne figurent donc pas nécessairement dans l'inventaire.
 const HD_RUNTIME_ORPHANS: &[&str] = &[
+    "ReShade.log",
     "enbbloom.fx.ini",
     "enbdepthoffield.fx.ini",
     "enbeffect.fx.ini",
@@ -105,16 +111,53 @@ pub struct EnbPrepareResult {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum HdComponentFile {
+    Set {
+        components: Vec<HdComponentManifest>,
+    },
+    Legacy(HdComponentManifest),
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum HdComponentKind {
+    Archive,
+    Installer,
+}
+
+impl Default for HdComponentKind {
+    fn default() -> Self {
+        Self::Archive
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HdComponentOutput {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct HdComponentManifest {
+    #[serde(default)]
+    kind: HdComponentKind,
     name: String,
     url: String,
     sha256: String,
     cache_key: String,
-    archive_prefix: String,
+    #[serde(default)]
+    archive_prefix: Option<String>,
     #[serde(default)]
     destination: Option<String>,
     #[serde(default)]
     include: Vec<String>,
+    #[serde(default)]
+    arguments: Vec<String>,
+    #[serde(default)]
+    outputs: Vec<HdComponentOutput>,
+    #[serde(default)]
+    managed_paths: Vec<String>,
 }
 
 pub fn staging_dir(gta_root: &Path) -> PathBuf {
@@ -141,45 +184,46 @@ pub fn prepare(gta_root: &Path, hd_enabled: bool) -> Result<EnbPrepareResult> {
     }
 
     let rules = load_hd_rules(&staging)?;
-    let component = load_hd_component_manifest(&staging)?;
-    let component_payload = if hd_enabled {
-        component
-            .as_ref()
+    let components = load_hd_component_manifests(&staging)?;
+    let prepared = if hd_enabled {
+        components
+            .iter()
             .map(|manifest| ensure_hd_component(gta_root, manifest))
-            .transpose()?
+            .collect::<Result<Vec<_>>>()?
     } else {
-        component
-            .as_ref()
-            .map(|manifest| component_payload_dir(gta_root, manifest))
-            .filter(|path| path.is_dir())
+        components
+            .iter()
+            .map(|manifest| component_cached_path(gta_root, manifest))
+            .collect()
     };
+
+    let component_trees = components
+        .iter()
+        .zip(prepared.iter())
+        .filter(|(manifest, path)| manifest.kind == HdComponentKind::Archive && path.is_dir())
+        .map(|(manifest, path)| Ok((path.clone(), component_destination(gta_root, manifest)?)))
+        .collect::<Result<Vec<_>>>()?;
 
     // Retire le déploiement précédent (y compris un ancien pack monolithique),
     // puis reconstruit l'état voulu de façon déterministe.
-    let component_destination = component
-        .as_ref()
-        .map(|manifest| component_destination(gta_root, manifest))
-        .transpose()?;
-    cleanup_previous_deployment(
-        gta_root,
-        &staging,
-        component_payload.as_deref(),
-        component_destination.as_deref(),
-    )?;
+    cleanup_previous_deployment(gta_root, &staging, &component_trees)?;
     purge_project2dfx_orphans(gta_root);
 
     let mut deployed = Vec::new();
 
-    // Le composant officiel est copié d'abord ; le preset GTRP présent dans le
-    // staging est ensuite copié par-dessus.
+    // Les composants officiels sont déployés d'abord ; le preset GTRP présent
+    // dans le staging est ensuite copié par-dessus.
     if hd_enabled {
-        if let Some(payload) = component_payload.as_deref() {
-            let destination = component_destination
-                .as_deref()
-                .ok_or_else(|| {
-                    LauncherError::Integrity("destination du composant HD absente".into())
-                })?;
-            copy_tree(payload, destination, gta_root, &mut deployed)?;
+        for (manifest, source) in components.iter().zip(prepared.iter()) {
+            match manifest.kind {
+                HdComponentKind::Archive => {
+                    let destination = component_destination(gta_root, manifest)?;
+                    copy_tree(source, &destination, gta_root, &mut deployed)?;
+                }
+                HdComponentKind::Installer => {
+                    deploy_installer_component(gta_root, manifest, source, &mut deployed)?;
+                }
+            }
         }
     }
 
@@ -321,12 +365,7 @@ fn copy_staging_files(
 }
 
 /// Copie un composant déjà extrait et ajoute ses chemins relatifs à l'inventaire.
-fn copy_tree(
-    src: &Path,
-    dst: &Path,
-    game_root: &Path,
-    deployed: &mut Vec<String>,
-) -> Result<()> {
+fn copy_tree(src: &Path, dst: &Path, game_root: &Path, deployed: &mut Vec<String>) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
@@ -350,22 +389,31 @@ fn copy_tree(
     Ok(())
 }
 
-fn load_hd_component_manifest(staging: &Path) -> Result<Option<HdComponentManifest>> {
+fn load_hd_component_manifests(staging: &Path) -> Result<Vec<HdComponentManifest>> {
     let path = staging.join(HD_COMPONENT_FILE);
     if !path.is_file() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let content = fs::read_to_string(path)?;
-    let manifest: HdComponentManifest = serde_json::from_str(&content)?;
-    validate_component_manifest(&manifest)?;
-    Ok(Some(manifest))
+    let file: HdComponentFile = serde_json::from_str(&content)?;
+    let manifests = match file {
+        HdComponentFile::Set { components } => components,
+        HdComponentFile::Legacy(manifest) => vec![manifest],
+    };
+    if manifests.is_empty() {
+        return Err(LauncherError::Integrity(
+            "la liste des composants HD est vide".into(),
+        ));
+    }
+    for manifest in &manifests {
+        validate_component_manifest(manifest)?;
+    }
+    Ok(manifests)
 }
 
 fn validate_component_manifest(manifest: &HdComponentManifest) -> Result<()> {
-    let trusted_url = manifest.url.starts_with("https://")
-        || manifest.url == "http://enbdev.com/enbseries_gtasa_v0430.zip";
     if manifest.name.trim().is_empty()
-        || !trusted_url
+        || !manifest.url.starts_with("https://")
         || manifest.sha256.len() != 64
         || !manifest.sha256.chars().all(|c| c.is_ascii_hexdigit())
         || manifest.cache_key.is_empty()
@@ -379,9 +427,46 @@ fn validate_component_manifest(manifest: &HdComponentManifest) -> Result<()> {
             "description du composant HD invalide".into(),
         ));
     }
-    normalize_archive_prefix(&manifest.archive_prefix)?;
-    component_destination(Path::new("."), manifest)?;
-    normalize_component_includes(&manifest.include)?;
+
+    match manifest.kind {
+        HdComponentKind::Archive => {
+            let prefix = manifest
+                .archive_prefix
+                .as_deref()
+                .ok_or_else(|| LauncherError::Integrity("préfixe d'archive HD absent".into()))?;
+            normalize_archive_prefix(prefix)?;
+            component_destination(Path::new("."), manifest)?;
+            normalize_component_includes(&manifest.include)?;
+        }
+        HdComponentKind::Installer => {
+            if !manifest
+                .url
+                .starts_with("https://reshade.me/downloads/ReShade_Setup_")
+                || manifest.arguments.is_empty()
+                || manifest.outputs.is_empty()
+                || manifest.arguments.iter().any(|arg| {
+                    arg.contains(['\r', '\n', '\0']) || (arg.contains('{') && arg != "{gta_exe}")
+                })
+            {
+                return Err(LauncherError::Integrity(
+                    "description de l'installateur ReShade invalide".into(),
+                ));
+            }
+            for output in &manifest.outputs {
+                validate_relative_str(&output.path.replace('\\', "/"))?;
+                if output.sha256.len() != 64
+                    || !output.sha256.chars().all(|c| c.is_ascii_hexdigit())
+                {
+                    return Err(LauncherError::Integrity(
+                        "sortie de l'installateur ReShade invalide".into(),
+                    ));
+                }
+            }
+            for path in &manifest.managed_paths {
+                validate_relative_str(&path.replace('\\', "/"))?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -389,9 +474,7 @@ fn component_destination(gta_root: &Path, manifest: &HdComponentManifest) -> Res
     match manifest.destination.as_deref() {
         // Compatibilité avec les descripteurs Proper Shaders déjà distribués.
         None => Ok(gta_root.join("modloader").join("Proper Shaders")),
-        Some(value) if value.trim().is_empty() || value.trim() == "." => {
-            Ok(gta_root.to_path_buf())
-        }
+        Some(value) if value.trim().is_empty() || value.trim() == "." => Ok(gta_root.to_path_buf()),
         Some(value) => {
             let normalized = value
                 .trim()
@@ -446,11 +529,44 @@ fn component_payload_dir(gta_root: &Path, manifest: &HdComponentManifest) -> Pat
         .join("content")
 }
 
+fn component_download_path(gta_root: &Path, manifest: &HdComponentManifest) -> PathBuf {
+    let extension = match manifest.kind {
+        HdComponentKind::Archive => "zip",
+        HdComponentKind::Installer => "exe",
+    };
+    components_root(gta_root)
+        .join("downloads")
+        .join(format!("{}.{}", manifest.cache_key, extension))
+}
+
+fn component_cached_path(gta_root: &Path, manifest: &HdComponentManifest) -> PathBuf {
+    match manifest.kind {
+        HdComponentKind::Archive => component_payload_dir(gta_root, manifest),
+        HdComponentKind::Installer => component_download_path(gta_root, manifest),
+    }
+}
+
+fn archive_cache_signature(manifest: &HdComponentManifest) -> Result<String> {
+    let prefix = normalize_archive_prefix(
+        manifest
+            .archive_prefix
+            .as_deref()
+            .ok_or_else(|| LauncherError::Integrity("préfixe d'archive HD absent".into()))?,
+    )?;
+    let includes = normalize_component_includes(&manifest.include)?;
+    Ok(format!(
+        "sha256={}\nprefix={}\ninclude={}\n",
+        manifest.sha256,
+        prefix,
+        includes.join("|")
+    ))
+}
+
 fn ensure_hd_component(gta_root: &Path, manifest: &HdComponentManifest) -> Result<PathBuf> {
     let root = components_root(gta_root);
     let downloads = root.join("downloads");
     fs::create_dir_all(&downloads)?;
-    let archive_path = downloads.join(format!("{}.zip", manifest.cache_key));
+    let archive_path = component_download_path(gta_root, manifest);
 
     let archive_valid = archive_path.is_file()
         && crate::updater::sha256_file(&archive_path)
@@ -461,11 +577,16 @@ fn ensure_hd_component(gta_root: &Path, manifest: &HdComponentManifest) -> Resul
         crate::updater::download_verify(&manifest.url, &archive_path, &manifest.sha256, |_| {})?;
     }
 
+    if manifest.kind == HdComponentKind::Installer {
+        return Ok(archive_path);
+    }
+
     let component_root = root.join(&manifest.cache_key);
     let payload = component_root.join("content");
-    let ready_marker = component_root.join(".source_sha256");
+    let ready_marker = component_root.join(".source_signature");
+    let expected_signature = archive_cache_signature(manifest)?;
     let ready = fs::read_to_string(&ready_marker)
-        .map(|hash| hash.trim().eq_ignore_ascii_case(&manifest.sha256))
+        .map(|signature| signature == expected_signature)
         .unwrap_or(false)
         && payload.is_dir();
     if ready {
@@ -482,7 +603,12 @@ fn ensure_hd_component(gta_root: &Path, manifest: &HdComponentManifest) -> Resul
     let mut archive = zip::ZipArchive::new(file).map_err(|e| {
         LauncherError::Integrity(format!("archive {} invalide : {e}", manifest.name))
     })?;
-    let prefix = normalize_archive_prefix(&manifest.archive_prefix)?;
+    let prefix = normalize_archive_prefix(
+        manifest
+            .archive_prefix
+            .as_deref()
+            .ok_or_else(|| LauncherError::Integrity("préfixe d'archive HD absent".into()))?,
+    )?;
     let includes = normalize_component_includes(&manifest.include)?;
     let mut extracted_files = 0usize;
 
@@ -545,8 +671,104 @@ fn ensure_hd_component(gta_root: &Path, manifest: &HdComponentManifest) -> Resul
         )));
     }
 
-    fs::write(&ready_marker, manifest.sha256.as_bytes())?;
+    fs::write(&ready_marker, expected_signature.as_bytes())?;
     Ok(payload)
+}
+
+#[cfg(windows)]
+fn installer_outputs_valid(gta_root: &Path, manifest: &HdComponentManifest) -> bool {
+    !manifest.outputs.is_empty()
+        && manifest.outputs.iter().all(|output| {
+            let path = gta_root.join(output.path.replace('\\', "/"));
+            path.is_file()
+                && crate::updater::sha256_file(&path)
+                    .map(|hash| hash.eq_ignore_ascii_case(&output.sha256))
+                    .unwrap_or(false)
+        })
+}
+
+#[cfg(windows)]
+fn record_installer_paths(
+    gta_root: &Path,
+    manifest: &HdComponentManifest,
+    deployed: &mut Vec<String>,
+) -> Result<()> {
+    for path in manifest
+        .managed_paths
+        .iter()
+        .map(String::as_str)
+        .chain(manifest.outputs.iter().map(|output| output.path.as_str()))
+    {
+        let rel = path.replace('\\', "/");
+        validate_relative_str(&rel)?;
+        if gta_root.join(&rel).is_file() && !deployed.iter().any(|item| item == &rel) {
+            deployed.push(rel);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn deploy_installer_component(
+    gta_root: &Path,
+    manifest: &HdComponentManifest,
+    installer: &Path,
+    deployed: &mut Vec<String>,
+) -> Result<()> {
+    if installer_outputs_valid(gta_root, manifest) {
+        return record_installer_paths(gta_root, manifest, deployed);
+    }
+
+    for output in &manifest.outputs {
+        let _ = fs::remove_file(gta_root.join(output.path.replace('\\', "/")));
+    }
+
+    let gta_exe = gta_root.join("gta_sa.exe");
+    if !gta_exe.is_file() {
+        return Err(LauncherError::Io(
+            "gta_sa.exe introuvable pour ReShade".into(),
+        ));
+    }
+
+    let arguments = manifest
+        .arguments
+        .iter()
+        .map(|argument| {
+            if argument == "{gta_exe}" {
+                gta_exe.as_os_str().to_os_string()
+            } else {
+                argument.into()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let status = Command::new(installer)
+        .args(arguments)
+        .current_dir(gta_root)
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|error| LauncherError::Io(format!("installation ReShade impossible : {error}")))?;
+    if !status.success() || !installer_outputs_valid(gta_root, manifest) {
+        return Err(LauncherError::Integrity(format!(
+            "{} n'a pas produit le moteur graphique attendu",
+            manifest.name
+        )));
+    }
+    record_installer_paths(gta_root, manifest, deployed)
+}
+
+#[cfg(not(windows))]
+fn deploy_installer_component(
+    _gta_root: &Path,
+    manifest: &HdComponentManifest,
+    _installer: &Path,
+    _deployed: &mut Vec<String>,
+) -> Result<()> {
+    Err(LauncherError::Io(format!(
+        "{} nécessite Windows",
+        manifest.name
+    )))
 }
 
 /// Compare deux fichiers octet par octet (taille puis contenu).
@@ -593,27 +815,23 @@ fn uninstall_asi_loader(gta_root: &Path, staging: &Path) {
 
 pub fn undeploy(gta_root: &Path) -> Result<()> {
     let staging = staging_dir(gta_root);
-    let manifest = load_hd_component_manifest(&staging).ok().flatten();
-    let component = manifest
-        .as_ref()
-        .map(|manifest| component_payload_dir(gta_root, manifest))
-        .filter(|path| path.is_dir());
-    let destination = manifest
-        .as_ref()
-        .and_then(|manifest| component_destination(gta_root, manifest).ok());
-    cleanup_previous_deployment(
-        gta_root,
-        &staging,
-        component.as_deref(),
-        destination.as_deref(),
-    )
+    let manifests = load_hd_component_manifests(&staging).unwrap_or_default();
+    let component_trees = manifests
+        .iter()
+        .filter(|manifest| manifest.kind == HdComponentKind::Archive)
+        .filter_map(|manifest| {
+            let payload = component_payload_dir(gta_root, manifest);
+            let destination = component_destination(gta_root, manifest).ok()?;
+            payload.is_dir().then_some((payload, destination))
+        })
+        .collect::<Vec<_>>();
+    cleanup_previous_deployment(gta_root, &staging, &component_trees)
 }
 
 fn cleanup_previous_deployment(
     gta_root: &Path,
     staging: &Path,
-    component_payload: Option<&Path>,
-    component_destination: Option<&Path>,
+    component_trees: &[(PathBuf, PathBuf)],
 ) -> Result<()> {
     let marker = gta_root.join(ENB_MARKER);
     if !marker.is_file() {
@@ -659,7 +877,7 @@ fn cleanup_previous_deployment(
         if staging.is_dir() {
             remove_tree_targets(staging, gta_root, staging)?;
         }
-        if let (Some(payload), Some(destination)) = (component_payload, component_destination) {
+        for (payload, destination) in component_trees {
             remove_tree_targets(payload, destination, payload)?;
         }
     }
@@ -959,7 +1177,10 @@ mod tests {
             fs::read(game.join("enbseries/enbhelper.dll")).unwrap(),
             b"ENB-HELPER"
         );
-        assert_eq!(fs::read(game.join("enbseries.ini")).unwrap(), b"GTRP-PRESET");
+        assert_eq!(
+            fs::read(game.join("enbseries.ini")).unwrap(),
+            b"GTRP-PRESET"
+        );
         assert!(!game.join("SilentPatchSA.asi").exists());
         fs::write(game.join("enbseries.log"), b"runtime log").unwrap();
         fs::write(game.join("enbeffect.fx.ini"), b"runtime settings").unwrap();
@@ -975,20 +1196,136 @@ mod tests {
     }
 
     #[test]
-    fn only_the_pinned_enbdev_http_archive_is_allowed() {
+    fn component_set_merges_multiple_archives_in_one_destination() {
+        let game = tmp("component_set");
+        let staging = create_split_pack(&game);
+        let downloads = components_root(&game).join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+
+        let mut descriptors = Vec::new();
+        for (cache_key, prefix, filename, body) in [
+            ("shader-a", "SourceA", "Shaders/A.fx", &b"SHADER-A"[..]),
+            ("shader-b", "SourceB", "Shaders/B.fx", &b"SHADER-B"[..]),
+        ] {
+            let archive_path = downloads.join(format!("{cache_key}.zip"));
+            let archive_file = fs::File::create(&archive_path).unwrap();
+            let mut archive = zip::ZipWriter::new(archive_file);
+            archive
+                .start_file(
+                    format!("{prefix}/{filename}"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            archive.write_all(body).unwrap();
+            archive.finish().unwrap();
+
+            descriptors.push(serde_json::json!({
+                "kind": "archive",
+                "name": cache_key,
+                "url": format!("https://invalid.example/{cache_key}.zip"),
+                "sha256": crate::updater::sha256_file(&archive_path).unwrap(),
+                "cache_key": cache_key,
+                "archive_prefix": prefix,
+                "destination": "reshade-shaders",
+                "include": [filename]
+            }));
+        }
+        fs::write(
+            staging.join(HD_COMPONENT_FILE),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "components": descriptors
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        prepare(&game, true).unwrap();
+        assert_eq!(
+            fs::read(game.join("reshade-shaders/Shaders/A.fx")).unwrap(),
+            b"SHADER-A"
+        );
+        assert_eq!(
+            fs::read(game.join("reshade-shaders/Shaders/B.fx")).unwrap(),
+            b"SHADER-B"
+        );
+
+        prepare(&game, false).unwrap();
+        assert!(!game.join("reshade-shaders/Shaders/A.fx").exists());
+        assert!(!game.join("reshade-shaders/Shaders/B.fx").exists());
+        let _ = fs::remove_dir_all(&game);
+    }
+
+    #[test]
+    fn changed_allowlist_refreshes_a_cached_archive() {
+        let game = tmp("component_allowlist");
+        let staging = create_split_pack(&game);
+        let downloads = components_root(&game).join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        let archive_path = downloads.join("allowlist-test.zip");
+        let archive_file = fs::File::create(&archive_path).unwrap();
+        let mut archive = zip::ZipWriter::new(archive_file);
+        for (name, body) in [("Pack/A.fx", b"A"), ("Pack/B.fx", b"B")] {
+            archive
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(body).unwrap();
+        }
+        archive.finish().unwrap();
+        let sha = crate::updater::sha256_file(&archive_path).unwrap();
+
+        let descriptor = |include: Vec<&str>| {
+            serde_json::json!({
+                "kind": "archive",
+                "name": "Allowlist test",
+                "url": "https://invalid.example/allowlist.zip",
+                "sha256": sha.clone(),
+                "cache_key": "allowlist-test",
+                "archive_prefix": "Pack",
+                "destination": "reshade-shaders/Shaders",
+                "include": include
+            })
+        };
+        fs::write(
+            staging.join(HD_COMPONENT_FILE),
+            serde_json::to_vec_pretty(&descriptor(vec!["A.fx"])).unwrap(),
+        )
+        .unwrap();
+        prepare(&game, true).unwrap();
+        assert!(game.join("reshade-shaders/Shaders/A.fx").is_file());
+        assert!(!game.join("reshade-shaders/Shaders/B.fx").exists());
+
+        fs::write(
+            staging.join(HD_COMPONENT_FILE),
+            serde_json::to_vec_pretty(&descriptor(vec!["A.fx", "B.fx"])).unwrap(),
+        )
+        .unwrap();
+        prepare(&game, true).unwrap();
+        assert!(game.join("reshade-shaders/Shaders/B.fx").is_file());
+        let _ = fs::remove_dir_all(&game);
+    }
+
+    #[test]
+    fn installer_must_come_from_the_official_reshade_downloads() {
         let base = HdComponentManifest {
-            name: "ENB".into(),
-            url: "http://enbdev.com/enbseries_gtasa_v0430.zip".into(),
+            kind: HdComponentKind::Installer,
+            name: "ReShade".into(),
+            url: "https://reshade.me/downloads/ReShade_Setup_6.7.3.exe".into(),
             sha256: "a".repeat(64),
-            cache_key: "enb-test".into(),
-            archive_prefix: "WrapperVersion/".into(),
-            destination: Some(String::new()),
-            include: vec!["d3d9.dll".into()],
+            cache_key: "reshade-test".into(),
+            archive_prefix: None,
+            destination: None,
+            include: Vec::new(),
+            arguments: vec!["{gta_exe}".into(), "--api".into(), "d3d9".into()],
+            outputs: vec![HdComponentOutput {
+                path: "d3d9.dll".into(),
+                sha256: "b".repeat(64),
+            }],
+            managed_paths: vec!["d3d9.dll".into(), "ReShade.ini".into()],
         };
         validate_component_manifest(&base).unwrap();
 
         let mut untrusted = base;
-        untrusted.url = "http://example.com/enbseries_gtasa_v0430.zip".into();
+        untrusted.url = "https://example.com/ReShade_Setup_6.7.3.exe".into();
         assert!(validate_component_manifest(&untrusted).is_err());
     }
 }

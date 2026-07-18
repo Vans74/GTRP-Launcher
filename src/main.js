@@ -305,10 +305,10 @@ async function preloadSampCache() {
 
 async function launch() {
   try {
-    const enb = await call("launch_game");
-    if (enb?.message) {
-      const kind = enb.applied ? "success" : "info";
-      toast(enb.message, kind);
+    const graphics = await call("launch_game");
+    if (graphics?.message) {
+      const kind = graphics.applied ? "success" : "info";
+      toast(graphics.message, kind);
     } else {
       toast("Lancement du jeu…", "success");
     }

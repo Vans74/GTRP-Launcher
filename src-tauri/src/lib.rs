@@ -104,7 +104,7 @@ fn launch_game(app: AppHandle) -> Result<enb::EnbPrepareResult> {
     }
     let install = resolve_install(&app)?;
 
-    let enb_result = enb::prepare(Path::new(&install.root), s.enhanced_graphics)?;
+    let graphics_result = enb::prepare(Path::new(&install.root), s.enhanced_graphics)?;
 
     launch::launch(
         &install,
@@ -113,7 +113,7 @@ fn launch_game(app: AppHandle) -> Result<enb::EnbPrepareResult> {
         config::SERVER_PORT,
     )?;
 
-    Ok(enb_result)
+    Ok(graphics_result)
 }
 
 #[tauri::command]

@@ -262,13 +262,10 @@ pub(crate) fn download_verify<F: FnMut(u64)>(
         std::fs::create_dir_all(parent)?;
     }
 
-    let mut request = ureq::get(url).set(
+    let request = ureq::get(url).set(
         "User-Agent",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GTRP-Launcher",
     );
-    if url == "http://enbdev.com/enbseries_gtasa_v0430.zip" {
-        request = request.set("Referer", "http://enbdev.com/mod_gtasa_v0430.htm");
-    }
     let resp = request
         .timeout(std::time::Duration::from_secs(60))
         .call()
@@ -325,7 +322,7 @@ pub fn apply_updates<F: FnMut(Progress)>(
     let bytes_total = plan.total_bytes.max(1);
 
     if let Some(ref bundle) = plan.bundle {
-        // Installation propre : on retire l'ancien déploiement ENB du jeu puis on
+        // Installation propre : on retire l'ancien déploiement graphique du jeu puis on
         // purge l'ancien staging, afin qu'aucun fichier obsolète d'un modpack
         // précédent ne subsiste avant d'extraire le nouveau bundle.
         let _ = crate::enb::undeploy(gta_root);
