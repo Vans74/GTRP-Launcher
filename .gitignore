@@ -11,6 +11,8 @@ src-tauri/gen/schemas/
 # Divers
 .DS_Store
 *.log
+__pycache__/
+*.py[cod]
 modpack-work/
 *.rar
 

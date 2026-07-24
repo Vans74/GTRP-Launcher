@@ -11,6 +11,54 @@ import subprocess
 import tempfile
 
 
+def _normalize_path(value: object) -> str:
+    path = str(value).replace("\\", "/").strip("/")
+    if (
+        not path
+        or ":" in path
+        or ".." in pathlib.PurePosixPath(path).parts
+    ):
+        raise ValueError(f"chemin non autorisé dans le manifeste : {value}")
+    return path.lower()
+
+
+def validate_update_integrity_consistency(document: dict) -> None:
+    """Refuse de signer un fichier diffusé avec une empreinte différente."""
+
+    policy = document.get("integrity")
+    if not isinstance(policy, dict) or not policy.get("enforce"):
+        raise ValueError("politique d'intégrité stricte absente ou désactivée")
+
+    inventory: dict[str, dict] = {}
+    for item in policy.get("files", []):
+        key = _normalize_path(item.get("path", ""))
+        if key in inventory:
+            raise ValueError(f"chemin dupliqué dans l'inventaire : {item['path']}")
+        inventory[key] = item
+
+    if not inventory:
+        raise ValueError("inventaire d'intégrité vide")
+
+    for update in document.get("files", []):
+        key = _normalize_path(update.get("path", ""))
+        expected = inventory.get(key)
+        if expected is None:
+            raise ValueError(
+                f"fichier diffusé absent de l'inventaire signé : {update['path']}"
+            )
+
+        update_sha = str(update.get("sha256", "")).lower()
+        expected_sha = str(expected.get("sha256", "")).lower()
+        update_size = int(update.get("size", 0))
+        expected_size = int(expected.get("size", 0))
+        if update_sha != expected_sha or update_size != expected_size:
+            raise ValueError(
+                "contradiction mise à jour/intégrité pour "
+                f"{update['path']} : diffusé={update_sha}/{update_size}, "
+                f"autorisé={expected_sha}/{expected_size}"
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", type=pathlib.Path)
@@ -27,6 +75,11 @@ def main() -> None:
 
     document = json.loads(args.manifest.read_text(encoding="utf-8"))
     document.pop("signature", None)
+    try:
+        validate_update_integrity_consistency(document)
+    except (TypeError, ValueError) as error:
+        raise SystemExit(f"Manifeste incohérent, signature refusée : {error}") from error
+
     canonical = json.dumps(
         document,
         sort_keys=True,

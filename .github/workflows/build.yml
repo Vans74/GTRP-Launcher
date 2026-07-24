@@ -18,6 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Tests du manifeste signé
+        run: python3 -m unittest discover -s scripts -p "test_*.py"
       - name: Tests unitaires (gtrp-core)
         working-directory: src-tauri/core
         run: cargo test
