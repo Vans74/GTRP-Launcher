@@ -40,6 +40,9 @@ pub const ARTWORK_FILES_BASE_URL: &str =
 pub const ARTWORK_BUNDLES_BASE_URL: &str =
     "https://afterhours-nsfw.fr/static/gtrp-artwork/bundles";
 
+/// Préautorisation à usage unique consommée par le serveur SA-MP.
+pub const LAUNCH_GATE_URL: &str = "https://afterhours-nsfw.fr/api/gtrp-launch/issue";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PublicConfig {
     pub server_name: String,

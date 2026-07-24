@@ -96,8 +96,28 @@ for spec in os.environ["SPECS"].splitlines():
     path, sha, size, url = spec.split("|")
     files.append({"path": path, "sha256": sha, "size": int(size), "url": url})
 m["files"] = files
+integrity_files = {
+    item["path"].lower(): item for item in m.get("integrity", {}).get("files", [])
+}
+for item in files:
+    targets = [item["path"]]
+    prefix = "gtrp-assets/enb/"
+    if item["path"].lower().startswith(prefix):
+        targets.append(item["path"][len(prefix):])
+    for target in targets:
+        current = integrity_files.get(target.lower())
+        if current is None:
+            raise SystemExit(
+                f"ERREUR: nouveau chemin {target} absent de l'inventaire; publie un modpack complet."
+            )
+        current["sha256"] = item["sha256"]
+        current["size"] = item["size"]
+m.pop("signature", None)
 json.dump(m, sys.stdout, indent=2, ensure_ascii=False)
 PY
+
+SIGNING_KEY="${GTRP_MANIFEST_SIGNING_KEY:-/home/afters-projects/.config/gtrp-launcher-signing/manifest-ed25519-private.pem}"
+python3 "$ROOT/scripts/sign-manifest.py" "$ROOT/modpack-work/manifest.json" --key "$SIGNING_KEY"
 
 echo "  nouveau manifeste :"
 python3 -c "import json;m=json.load(open('$ROOT/modpack-work/manifest.json'));print('    version',m['version'],'| bundle_required',m.get('bundle_required'),'| files:',[f['path'] for f in m['files']])"

@@ -6,10 +6,19 @@
 //! hash de chaque téléchargement. Il peut aussi signaler des fichiers interdits.
 
 use crate::error::{LauncherError, Result};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+/// Clé publique Ed25519 de production. La clé privée correspondante reste
+/// exclusivement sur le serveur de publication, hors du dépôt et du launcher.
+const MANIFEST_KEY_ID: &str = "gtrp-manifest-2026-01";
+const MANIFEST_PUBLIC_KEY_HEX: &str =
+    "eb1e38974e10dd6cd5f09e443b33da679c3e61e58b300417d75d548dceca78c1";
+const MIN_INTEGRITY_GENERATION: u64 = 1;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ManifestBundle {
@@ -41,6 +50,12 @@ pub struct Manifest {
     /// Motifs de fichiers interdits (anti-triche), relatifs au dossier du jeu.
     #[serde(default)]
     pub forbidden: Vec<String>,
+    /// Inventaire exhaustif de l'installation autorisée.
+    #[serde(default)]
+    pub integrity: Option<IntegrityPolicy>,
+    /// Signature du manifeste complet (champ `signature` exclu du message signé).
+    #[serde(default)]
+    pub signature: Option<ManifestSignature>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -55,6 +70,57 @@ pub struct ManifestFile {
     /// URL explicite ; si absente, on utilise `{base_url}/{path}`.
     #[serde(default)]
     pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ManifestSignature {
+    pub algorithm: String,
+    pub key_id: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrityProfile {
+    #[default]
+    Always,
+    Hd,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IntegrityFile {
+    /// Chemin final relatif à la racine du jeu.
+    pub path: String,
+    /// SHA-256 attendu.
+    pub sha256: String,
+    #[serde(default)]
+    pub size: u64,
+    /// `hd` signifie que le fichier doit exister uniquement lorsque le bouton
+    /// Graphismes HD est actif. Le staging reste toujours `always`.
+    #[serde(default)]
+    pub profile: IntegrityProfile,
+    /// Un fichier optionnel peut être absent, mais s'il existe son hash doit
+    /// correspondre (ex. fichiers générés de façon déterministe au 1er lancement).
+    #[serde(default)]
+    pub optional: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IntegrityPolicy {
+    /// Numéro monotone empêchant de resservir une politique signée antérieure
+    /// à l'activation du verrou strict.
+    #[serde(default)]
+    pub generation: u64,
+    /// Une politique signée mais non forcée sert uniquement aux migrations.
+    #[serde(default)]
+    pub enforce: bool,
+    /// Tous les fichiers autorisés, y compris le jeu de base et le modpack.
+    #[serde(default)]
+    pub files: Vec<IntegrityFile>,
+    /// Seuls les fichiers de sortie sans influence sur le jeu peuvent être
+    /// variables. `dir/**` ignore le contenu du dossier, `*.log` les journaux.
+    #[serde(default)]
+    pub mutable_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,8 +154,14 @@ pub struct Progress {
 #[derive(Debug, Clone, Serialize)]
 pub struct IntegrityReport {
     pub ok: bool,
+    pub enforced: bool,
+    pub checked_files: usize,
     /// Fichiers attendus mais manquants ou corrompus.
     pub invalid: Vec<String>,
+    /// Fichiers non déclarés dans l'inventaire signé.
+    pub unexpected: Vec<String>,
+    /// Liens symboliques/jonctions refusés pour empêcher les évasions de racine.
+    pub reparse_points: Vec<String>,
     /// Fichiers interdits détectés.
     pub forbidden_found: Vec<String>,
 }
@@ -149,7 +221,91 @@ pub fn cache_busted(url: &str) -> String {
     format!("{url}{sep}_={nonce}")
 }
 
-/// Télécharge et parse le manifest distant (sans cache CDN).
+/// Sérialisation JSON canonique minimale utilisée pour la signature.
+///
+/// Les clés d'objets sont triées ; les tableaux conservent leur ordre. On signe
+/// donc aussi les champs inconnus d'un futur manifeste, ce qui évite qu'une
+/// version ancienne du launcher valide seulement une partie du document.
+fn canonical_json(value: &serde_json::Value, out: &mut String) -> Result<()> {
+    match value {
+        serde_json::Value::Null => out.push_str("null"),
+        serde_json::Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+        serde_json::Value::Number(value) => out.push_str(&value.to_string()),
+        serde_json::Value::String(value) => out.push_str(&serde_json::to_string(value)?),
+        serde_json::Value::Array(values) => {
+            out.push('[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                canonical_json(value, out)?;
+            }
+            out.push(']');
+        }
+        serde_json::Value::Object(values) => {
+            out.push('{');
+            let sorted = values.iter().collect::<BTreeMap<_, _>>();
+            for (index, (key, value)) in sorted.into_iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::to_string(key)?);
+                out.push(':');
+                canonical_json(value, out)?;
+            }
+            out.push('}');
+        }
+    }
+    Ok(())
+}
+
+fn signature_payload(mut value: serde_json::Value) -> Result<Vec<u8>> {
+    let object = value.as_object_mut().ok_or_else(|| {
+        LauncherError::Integrity("le manifeste signé doit être un objet JSON".into())
+    })?;
+    object.remove("signature");
+    let mut canonical = String::new();
+    canonical_json(&value, &mut canonical)?;
+    Ok(canonical.into_bytes())
+}
+
+fn verify_manifest_value(value: &serde_json::Value, public_key: &[u8; 32]) -> Result<()> {
+    let signature_value = value
+        .get("signature")
+        .ok_or_else(|| LauncherError::Integrity("signature du manifeste absente".into()))?;
+    let signature: ManifestSignature = serde_json::from_value(signature_value.clone())
+        .map_err(|_| LauncherError::Integrity("signature du manifeste invalide".into()))?;
+    if signature.algorithm != "ed25519" || signature.key_id != MANIFEST_KEY_ID {
+        return Err(LauncherError::Integrity(
+            "algorithme ou clé de signature du manifeste non autorisé".into(),
+        ));
+    }
+
+    let signature_bytes = hex::decode(&signature.value)
+        .map_err(|_| LauncherError::Integrity("signature du manifeste mal encodée".into()))?;
+    let signature_bytes: [u8; 64] = signature_bytes.try_into().map_err(|_| {
+        LauncherError::Integrity("longueur de signature du manifeste invalide".into())
+    })?;
+    let verifying_key = VerifyingKey::from_bytes(public_key)
+        .map_err(|_| LauncherError::Integrity("clé publique du manifeste invalide".into()))?;
+    let payload = signature_payload(value.clone())?;
+    verifying_key
+        .verify(&payload, &Signature::from_bytes(&signature_bytes))
+        .map_err(|_| LauncherError::Integrity("signature du manifeste incorrecte".into()))
+}
+
+fn parse_signed_manifest(text: &str) -> Result<Manifest> {
+    let value: serde_json::Value = serde_json::from_str(text)?;
+    let public_key = hex::decode(MANIFEST_PUBLIC_KEY_HEX)
+        .map_err(|_| LauncherError::Integrity("clé publique intégrée invalide".into()))?;
+    let public_key: [u8; 32] = public_key
+        .try_into()
+        .map_err(|_| LauncherError::Integrity("longueur de clé publique invalide".into()))?;
+    verify_manifest_value(&value, &public_key)?;
+    Ok(serde_json::from_value(value)?)
+}
+
+/// Télécharge, authentifie puis parse le manifeste distant (sans cache CDN).
 pub fn fetch_manifest(url: &str) -> Result<Manifest> {
     let resp = ureq::get(&cache_busted(url))
         .timeout(std::time::Duration::from_secs(15))
@@ -160,8 +316,7 @@ pub fn fetch_manifest(url: &str) -> Result<Manifest> {
     let text = resp
         .into_string()
         .map_err(|e| LauncherError::Network(format!("lecture manifest : {e}")))?;
-    let manifest: Manifest = serde_json::from_str(&text)?;
-    Ok(manifest)
+    parse_signed_manifest(&text)
 }
 
 /// Fichier témoin de version du modpack installé.
@@ -169,7 +324,9 @@ pub const MODPACK_VERSION_FILE: &str = "gtrp-assets/.modpack_version";
 
 fn installed_modpack_version(gta_root: &Path) -> Option<String> {
     let path = gta_root.join(MODPACK_VERSION_FILE);
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 fn write_modpack_version(gta_root: &Path, version: &str) -> Result<()> {
@@ -189,6 +346,32 @@ pub fn plan_updates(manifest: &Manifest, gta_root: &Path) -> Result<UpdatePlan> 
     let installed_ver = installed_modpack_version(gta_root);
     let staging_missing = !gta_root.join("gtrp-assets/enb").is_dir();
     let version_changed = installed_ver.as_deref() != Some(manifest.version.as_str());
+    let patch_paths = manifest
+        .files
+        .iter()
+        .map(|file| normalize_rel(&file.path))
+        .collect::<Result<HashSet<_>>>()?;
+    let staging_corrupt = manifest
+        .integrity
+        .as_ref()
+        .map(|policy| {
+            policy.files.iter().any(|file| {
+                let Ok(rel) = normalize_rel(&file.path) else {
+                    return true;
+                };
+                if file.optional
+                    || !rel.starts_with("gtrp-assets/enb/")
+                    || patch_paths.contains(&rel)
+                {
+                    return false;
+                }
+                let Ok(path) = safe_join(gta_root, &rel) else {
+                    return true;
+                };
+                !integrity_file_matches(&path, file)
+            })
+        })
+        .unwrap_or(false);
 
     // Bundle complet : première installation, ou changement de version sur une release
     // « lourde » (bundle_required=true, défaut). Les patchs légers passent bundle_required=false.
@@ -199,6 +382,7 @@ pub fn plan_updates(manifest: &Manifest, gta_root: &Path) -> Result<UpdatePlan> 
             staging_missing
                 || installed_ver.is_none()
                 || (version_changed && manifest.bundle_required)
+                || staging_corrupt
         })
         .unwrap_or(false);
 
@@ -304,9 +488,9 @@ pub(crate) fn download_verify<F: FnMut(u64)>(
     // Installation atomique.
     std::fs::rename(&tmp, dest).or_else(|_| {
         // rename peut échouer entre volumes : fallback copie.
-        std::fs::copy(&tmp, dest).map(|_| ()).and_then(|_| {
+        std::fs::copy(&tmp, dest).map(|_| {
             let _ = std::fs::remove_file(&tmp);
-            Ok(())
+            ()
         })
     })?;
     Ok(())
@@ -422,28 +606,241 @@ fn extract_zip(zip_path: &Path, dest_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Vérifie l'intégrité complète : chaque fichier du manifest doit être présent
-/// et valide, et aucun fichier interdit ne doit être présent.
-pub fn verify_integrity(manifest: &Manifest, gta_root: &Path) -> Result<IntegrityReport> {
-    let mut invalid = Vec::new();
-    for f in &manifest.files {
-        let dest = safe_join(gta_root, &f.path)?;
-        let ok = dest.is_file()
-            && sha256_file(&dest)
-                .map(|h| h.eq_ignore_ascii_case(&f.sha256))
-                .unwrap_or(false);
-        if !ok {
-            invalid.push(f.path.clone());
+fn normalize_rel(path: &str) -> Result<String> {
+    let path = path.replace('\\', "/");
+    let path = path.trim_start_matches("./").trim_matches('/');
+    if path.is_empty()
+        || path.contains(':')
+        || Path::new(path)
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(LauncherError::Integrity(format!(
+            "chemin d'intégrité non autorisé : {path}"
+        )));
+    }
+    Ok(path.to_ascii_lowercase())
+}
+
+fn validate_sha256(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit())
+}
+
+fn integrity_file_matches(path: &Path, expected: &IntegrityFile) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    metadata.is_file()
+        && metadata.len() == expected.size
+        && sha256_file(path)
+            .map(|hash| hash.eq_ignore_ascii_case(&expected.sha256))
+            .unwrap_or(false)
+}
+
+fn mutable_path_matches(rel: &str, patterns: &[String]) -> Result<bool> {
+    let rel = rel.replace('\\', "/").to_ascii_lowercase();
+    for pattern in patterns {
+        let pattern = pattern.replace('\\', "/").to_ascii_lowercase();
+        if pattern.contains("..") || pattern.contains(':') || pattern.starts_with('/') {
+            return Err(LauncherError::Integrity(format!(
+                "chemin mutable non autorisé : {pattern}"
+            )));
+        }
+        if let Some(prefix) = pattern.strip_suffix("/**") {
+            if rel == prefix || rel.starts_with(&format!("{prefix}/")) {
+                return Ok(true);
+            }
+        } else if let Some(suffix) = pattern.strip_prefix('*') {
+            if rel.ends_with(suffix) {
+                return Ok(true);
+            }
+        } else if rel == pattern {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn scan_installation(
+    gta_root: &Path,
+    directory: &Path,
+    expected: &HashSet<String>,
+    mutable_paths: &[String],
+    unexpected: &mut Vec<String>,
+    reparse_points: &mut Vec<String>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        let rel = path
+            .strip_prefix(gta_root)
+            .map_err(|_| LauncherError::Integrity("fichier hors racine détecté".into()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let key = rel.to_ascii_lowercase();
+
+        // Le test est volontairement effectué avant l'exclusion mutable : un
+        // cache autorisé ne doit jamais devenir une jonction vers un autre disque.
+        if is_reparse_point(&metadata) {
+            reparse_points.push(rel);
+            continue;
+        }
+
+        if metadata.is_dir() {
+            if !mutable_path_matches(&key, mutable_paths)? {
+                scan_installation(
+                    gta_root,
+                    &path,
+                    expected,
+                    mutable_paths,
+                    unexpected,
+                    reparse_points,
+                )?;
+            }
+        } else if metadata.is_file()
+            && !expected.contains(&key)
+            && !mutable_path_matches(&key, mutable_paths)?
+        {
+            unexpected.push(rel);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+fn verify_policy(
+    policy: &IntegrityPolicy,
+    gta_root: &Path,
+    hd_enabled: bool,
+    forbidden: &[String],
+) -> Result<IntegrityReport> {
+    if policy.generation < MIN_INTEGRITY_GENERATION {
+        return Err(LauncherError::Integrity(
+            "politique d'intégrité obsolète (protection anti-retour arrière)".into(),
+        ));
+    }
+    if policy.files.is_empty() {
+        return Err(LauncherError::Integrity(
+            "inventaire d'intégrité signé vide".into(),
+        ));
+    }
+
+    let mut all_paths = HashSet::new();
+    let mut expected = HashMap::new();
+    for file in &policy.files {
+        let key = normalize_rel(&file.path)?;
+        if !validate_sha256(&file.sha256) {
+            return Err(LauncherError::Integrity(format!(
+                "SHA-256 invalide dans l'inventaire : {}",
+                file.path
+            )));
+        }
+        if !all_paths.insert(key.clone()) {
+            return Err(LauncherError::Integrity(format!(
+                "chemin dupliqué dans l'inventaire : {}",
+                file.path
+            )));
+        }
+        if file.profile == IntegrityProfile::Always
+            || (file.profile == IntegrityProfile::Hd && hd_enabled)
+        {
+            expected.insert(key, file);
         }
     }
 
-    let forbidden_found = scan_forbidden(gta_root, &manifest.forbidden);
+    let mut invalid = Vec::new();
+    for file in expected.values() {
+        let destination = safe_join(gta_root, &file.path)?;
+        if !destination.exists() && file.optional {
+            continue;
+        }
+        if !integrity_file_matches(&destination, file) {
+            invalid.push(file.path.clone());
+        }
+    }
 
+    let expected_paths = expected.keys().cloned().collect::<HashSet<_>>();
+    let mut unexpected = Vec::new();
+    let mut reparse_points = Vec::new();
+    scan_installation(
+        gta_root,
+        gta_root,
+        &expected_paths,
+        &policy.mutable_paths,
+        &mut unexpected,
+        &mut reparse_points,
+    )?;
+    let forbidden_found = scan_forbidden(gta_root, forbidden);
+
+    invalid.sort();
+    unexpected.sort();
+    reparse_points.sort();
+    let ok = invalid.is_empty()
+        && unexpected.is_empty()
+        && reparse_points.is_empty()
+        && forbidden_found.is_empty();
     Ok(IntegrityReport {
-        ok: invalid.is_empty() && forbidden_found.is_empty(),
+        ok,
+        enforced: policy.enforce,
+        checked_files: expected.len(),
         invalid,
+        unexpected,
+        reparse_points,
         forbidden_found,
     })
+}
+
+/// Vérifie l'intégrité exhaustive pour le profil graphique actif.
+pub fn verify_integrity_for_profile(
+    manifest: &Manifest,
+    gta_root: &Path,
+    hd_enabled: bool,
+) -> Result<IntegrityReport> {
+    if let Some(policy) = &manifest.integrity {
+        return verify_policy(policy, gta_root, hd_enabled, &manifest.forbidden);
+    }
+
+    // Compatibilité interne avec les anciens manifests dans les tests/outils.
+    // Le chemin de lancement strict exige explicitement une politique exhaustive.
+    let mut invalid = Vec::new();
+    for file in &manifest.files {
+        let destination = safe_join(gta_root, &file.path)?;
+        let valid = destination.is_file()
+            && sha256_file(&destination)
+                .map(|hash| hash.eq_ignore_ascii_case(&file.sha256))
+                .unwrap_or(false);
+        if !valid {
+            invalid.push(file.path.clone());
+        }
+    }
+    let forbidden_found = scan_forbidden(gta_root, &manifest.forbidden);
+    let ok = invalid.is_empty() && forbidden_found.is_empty();
+    Ok(IntegrityReport {
+        ok,
+        enforced: false,
+        checked_files: manifest.files.len(),
+        invalid,
+        unexpected: Vec::new(),
+        reparse_points: Vec::new(),
+        forbidden_found,
+    })
+}
+
+pub fn verify_integrity(manifest: &Manifest, gta_root: &Path) -> Result<IntegrityReport> {
+    verify_integrity_for_profile(manifest, gta_root, true)
 }
 
 /// Recherche des fichiers interdits. Un motif peut être un chemin relatif exact
@@ -456,7 +853,10 @@ pub fn scan_forbidden(gta_root: &Path, patterns: &[String]) -> Vec<String> {
     for pat in patterns {
         // Motif exact d'un chemin.
         if !pat.contains('*') {
-            if safe_join(gta_root, pat).map(|p| p.is_file()).unwrap_or(false) {
+            if safe_join(gta_root, pat)
+                .map(|p| p.is_file())
+                .unwrap_or(false)
+            {
                 found.push(pat.clone());
             }
             continue;
@@ -478,7 +878,7 @@ fn pattern_matches(rel: &str, pattern: &str) -> bool {
     }
     if let Some(prefix) = pattern.strip_suffix('*') {
         // "cleo/*" -> commence par "cleo/"
-        return rel.starts_with(&prefix);
+        return rel.starts_with(prefix);
     }
     rel == pattern
 }
@@ -504,6 +904,7 @@ fn collect_matches(root: &Path, dir: &Path, pattern: &str, out: &mut Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
 
     fn tmp_dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("gtrp_upd_{}_{}", tag, std::process::id()));
@@ -562,6 +963,8 @@ mod tests {
                 },
             ],
             forbidden: vec![],
+            integrity: None,
+            signature: None,
         };
 
         let plan = plan_updates(&manifest, &dir).unwrap();
@@ -599,6 +1002,8 @@ mod tests {
                 url: None,
             }],
             forbidden: vec![],
+            integrity: None,
+            signature: None,
         };
 
         let plan = plan_updates(&manifest, &dir).unwrap();
@@ -626,6 +1031,8 @@ mod tests {
             bundle_required: true,
             files: vec![],
             forbidden: vec![],
+            integrity: None,
+            signature: None,
         };
 
         let plan = plan_updates(&manifest, &dir).unwrap();
@@ -645,7 +1052,9 @@ mod tests {
 
         let found = scan_forbidden(&dir, &["*.asi".into(), "cleo/*".into()]);
         assert!(found.iter().any(|f| f.ends_with("trainer.asi")));
-        assert!(found.iter().any(|f| f.replace('\\', "/").ends_with("cleo/cheat.cs")));
+        assert!(found
+            .iter()
+            .any(|f| f.replace('\\', "/").ends_with("cleo/cheat.cs")));
         assert!(!found.iter().any(|f| f.ends_with("clean.txt")));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -666,10 +1075,100 @@ mod tests {
                 url: None,
             }],
             forbidden: vec![],
+            integrity: None,
+            signature: None,
         };
         let report = verify_integrity(&manifest, &dir).unwrap();
         assert!(!report.ok);
         assert_eq!(report.invalid, vec!["present.txt".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn integrity_entry(path: &str, data: &[u8], profile: IntegrityProfile) -> IntegrityFile {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        IntegrityFile {
+            path: path.into(),
+            sha256: hex::encode(hasher.finalize()),
+            size: data.len() as u64,
+            profile,
+            optional: false,
+        }
+    }
+
+    #[test]
+    fn exhaustive_policy_rejects_unknown_files_but_allows_runtime_logs() {
+        let dir = tmp_dir("strict");
+        std::fs::write(dir.join("gta_sa.exe"), b"game").unwrap();
+        std::fs::write(dir.join("runtime.log"), b"variable").unwrap();
+        std::fs::write(dir.join("trainer.asi"), b"cheat").unwrap();
+        let policy = IntegrityPolicy {
+            generation: 1,
+            enforce: true,
+            files: vec![integrity_entry(
+                "gta_sa.exe",
+                b"game",
+                IntegrityProfile::Always,
+            )],
+            mutable_paths: vec!["*.log".into()],
+        };
+
+        let report = verify_policy(&policy, &dir, false, &[]).unwrap();
+        assert!(!report.ok);
+        assert!(report.enforced);
+        assert_eq!(report.checked_files, 1);
+        assert_eq!(report.unexpected, vec!["trainer.asi".to_string()]);
+        assert!(report.invalid.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hd_profile_is_required_only_when_enabled() {
+        let dir = tmp_dir("profile");
+        std::fs::write(dir.join("base.dat"), b"base").unwrap();
+        let policy = IntegrityPolicy {
+            generation: 1,
+            enforce: true,
+            files: vec![
+                integrity_entry("base.dat", b"base", IntegrityProfile::Always),
+                integrity_entry("d3d9.dll", b"hd", IntegrityProfile::Hd),
+            ],
+            mutable_paths: vec![],
+        };
+
+        let disabled = verify_policy(&policy, &dir, false, &[]).unwrap();
+        assert!(disabled.ok);
+        std::fs::write(dir.join("d3d9.dll"), b"hd").unwrap();
+        let enabled = verify_policy(&policy, &dir, true, &[]).unwrap();
+        assert!(enabled.ok);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn signed_manifest_detects_any_mutation() {
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let mut value = serde_json::json!({
+            "version": "1.0.0",
+            "base_url": "https://example.invalid",
+            "bundle_required": true,
+            "files": [],
+            "forbidden": [],
+            "integrity": {
+                "enforce": true,
+                "files": [],
+                "mutable_paths": []
+            }
+        });
+        let payload = signature_payload(value.clone()).unwrap();
+        let signature = signing_key.sign(&payload);
+        value["signature"] = serde_json::json!({
+            "algorithm": "ed25519",
+            "key_id": MANIFEST_KEY_ID,
+            "value": hex::encode(signature.to_bytes())
+        });
+
+        assert!(verify_manifest_value(&value, signing_key.verifying_key().as_bytes()).is_ok());
+        value["version"] = serde_json::Value::String("1.0.1".into());
+        assert!(verify_manifest_value(&value, signing_key.verifying_key().as_bytes()).is_err());
     }
 }

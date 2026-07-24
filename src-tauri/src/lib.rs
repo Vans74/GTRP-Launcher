@@ -6,7 +6,9 @@
 
 use gtrp_core::config;
 use gtrp_core::error::{LauncherError, Result};
-use gtrp_core::{enb, gta, launch, news, query, samp_cache, settings, updater};
+use gtrp_core::{
+    enb, gta, laa, launch, launcher_gate, news, query, runtime_guard, samp_cache, settings, updater,
+};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -93,8 +95,56 @@ fn set_enhanced_graphics(app: AppHandle, enabled: bool) -> Result<settings::Sett
     Ok(s)
 }
 
+fn integrity_failure_message(report: &updater::IntegrityReport) -> String {
+    let mut categories = Vec::new();
+    if !report.invalid.is_empty() {
+        categories.push(format!(
+            "{} fichier(s) modifié(s) ou manquant(s)",
+            report.invalid.len()
+        ));
+    }
+    if !report.unexpected.is_empty() {
+        categories.push(format!(
+            "{} fichier(s) non autorisé(s)",
+            report.unexpected.len()
+        ));
+    }
+    if !report.reparse_points.is_empty() {
+        categories.push(format!(
+            "{} lien(s)/jonction(s) interdit(s)",
+            report.reparse_points.len()
+        ));
+    }
+    if !report.forbidden_found.is_empty() {
+        categories.push(format!(
+            "{} composant(s) explicitement interdit(s)",
+            report.forbidden_found.len()
+        ));
+    }
+
+    let examples = report
+        .invalid
+        .iter()
+        .chain(report.unexpected.iter())
+        .chain(report.reparse_points.iter())
+        .chain(report.forbidden_found.iter())
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>();
+    let suffix = if examples.is_empty() {
+        String::new()
+    } else {
+        format!(" : {}", examples.join(", "))
+    };
+    format!(
+        "Lancement bloqué par le contrôle d'intégrité ({}){}. Répare le jeu avec le launcher ou réinstalle l'installation GTRP officielle.",
+        categories.join(", "),
+        suffix
+    )
+}
+
 #[tauri::command]
-fn launch_game(app: AppHandle) -> Result<enb::EnbPrepareResult> {
+async fn launch_game(app: AppHandle) -> Result<enb::EnbPrepareResult> {
     let dir = config_dir(&app)?;
     let s = settings::load(&dir);
     if !settings::is_valid_nickname(&s.nickname) {
@@ -103,17 +153,60 @@ fn launch_game(app: AppHandle) -> Result<enb::EnbPrepareResult> {
         ));
     }
     let install = resolve_install(&app)?;
+    let manifest_url = format!("{}/manifest.json", config::ASSET_BASE_URL);
+    let app_for_guard = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = Path::new(&install.root);
+        let manifest = updater::fetch_manifest(&manifest_url)?;
+        let plan = updater::plan_updates(&manifest, root)?;
+        if !plan.up_to_date {
+            return Err(LauncherError::Integrity(
+                "mise à jour ou réparation du modpack requise avant le lancement".into(),
+            ));
+        }
 
-    let graphics_result = enb::prepare(Path::new(&install.root), s.enhanced_graphics)?;
+        let graphics_result = enb::prepare(root, s.enhanced_graphics)?;
+        // Le patch LAA est une modification officielle du launcher ; il doit
+        // être appliqué avant le calcul des hashes, jamais après.
+        laa::set_large_address_aware(Path::new(&install.gta_exe))?;
 
-    launch::launch(
-        &install,
-        &s.nickname,
-        config::SERVER_HOST,
-        config::SERVER_PORT,
-    )?;
+        let policy = manifest.integrity.as_ref().ok_or_else(|| {
+            LauncherError::Integrity("politique d'intégrité exhaustive absente".into())
+        })?;
+        if !policy.enforce {
+            return Err(LauncherError::Integrity(
+                "politique d'intégrité stricte non activée".into(),
+            ));
+        }
+        let report = updater::verify_integrity_for_profile(&manifest, root, s.enhanced_graphics)?;
+        if !report.ok {
+            return Err(LauncherError::Integrity(integrity_failure_message(&report)));
+        }
 
-    Ok(graphics_result)
+        let guard_root = root.to_path_buf();
+        let guard_manifest = manifest.clone();
+        let guard_hd = s.enhanced_graphics;
+        runtime_guard::launch_guarded(
+            guard_root,
+            guard_manifest,
+            guard_hd,
+            || {
+                launcher_gate::authorize(&s.nickname, policy.generation)?;
+                launch::launch(
+                    &install,
+                    &s.nickname,
+                    config::SERVER_HOST,
+                    config::SERVER_PORT,
+                )
+            },
+            move |issue| {
+                let _ = app_for_guard.emit("integrity-violation", issue);
+            },
+        )?;
+        Ok(graphics_result)
+    })
+    .await
+    .map_err(|error| LauncherError::Other(format!("tâche interrompue : {error}")))?
 }
 
 #[tauri::command]
@@ -174,10 +267,12 @@ async fn sync_samp_cache(app: AppHandle) -> Result<samp_cache::CacheSyncResult> 
 #[tauri::command]
 async fn verify_integrity(app: AppHandle) -> Result<updater::IntegrityReport> {
     let install = resolve_install(&app)?;
+    let cfg = config_dir(&app)?;
+    let enhanced = settings::load(&cfg).enhanced_graphics;
     let manifest_url = format!("{}/manifest.json", config::ASSET_BASE_URL);
     tauri::async_runtime::spawn_blocking(move || {
         let manifest = updater::fetch_manifest(&manifest_url)?;
-        updater::verify_integrity(&manifest, Path::new(&install.root))
+        updater::verify_integrity_for_profile(&manifest, Path::new(&install.root), enhanced)
     })
     .await
     .map_err(|e| LauncherError::Other(format!("tâche interrompue : {e}")))?

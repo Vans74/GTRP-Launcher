@@ -10,7 +10,16 @@
       "outputs": [
         {
           "path": "d3d9.dll",
-          "sha256": "B63DF921946967D2CD8DDB1BF8A5F66B4F3C9B269A5F4EA8BA49B6DBA330658B"
+          "sha256": "B63DF921946967D2CD8DDB1BF8A5F66B4F3C9B269A5F4EA8BA49B6DBA330658B",
+          "size": 4015384
+        }
+      ],
+      "generated_outputs": [
+        {
+          "path": "ReShadePreset.ini",
+          "sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+          "size": 0,
+          "optional": true
         }
       ],
       "managed_paths": ["d3d9.dll", "ReShade.ini", "ReShadePreset.ini"]

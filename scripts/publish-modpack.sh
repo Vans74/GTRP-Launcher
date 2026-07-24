@@ -23,8 +23,11 @@ VERSION="${1:-}"
 
 ZIP="$WORK/gtrp-modpack-$VERSION.zip"
 MANIFEST="$WORK/manifest.json"
+SIGNING_KEY="${GTRP_MANIFEST_SIGNING_KEY:-/home/afters-projects/.config/gtrp-launcher-signing/manifest-ed25519-private.pem}"
 [[ -f "$ZIP" ]] || { echo "ERREUR: $ZIP introuvable — lance assemble-graphics-modpack.sh $VERSION" >&2; exit 1; }
 [[ -f "$MANIFEST" ]] || { echo "ERREUR: $MANIFEST introuvable" >&2; exit 1; }
+
+python3 "$ROOT/scripts/sign-manifest.py" "$MANIFEST" --key "$SIGNING_KEY"
 
 api() { curl -s -H "Authorization: token $GTRP_GH_TOKEN" "$@"; }
 

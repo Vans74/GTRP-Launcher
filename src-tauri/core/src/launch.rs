@@ -15,7 +15,7 @@ use crate::gta::GameInstall;
 
 /// Prépare le registre puis lance le jeu.
 #[cfg(windows)]
-pub fn launch(install: &GameInstall, nickname: &str, host: &str, port: u16) -> Result<()> {
+pub fn launch(install: &GameInstall, nickname: &str, host: &str, port: u16) -> Result<u32> {
     use std::os::windows::process::CommandExt;
     use std::path::Path;
     use std::process::Command;
@@ -40,15 +40,6 @@ pub fn launch(install: &GameInstall, nickname: &str, host: &str, port: u16) -> R
         .set_value("gta_sa_exe", &install.gta_exe)
         .map_err(|e| LauncherError::Config(format!("écriture gta_sa_exe : {e}")))?;
 
-    // 1bis) Patch « 4 Go » (Large Address Aware) sur gta_sa.exe.
-    // Le jeu 32 bits est bridé à ~2 Go ; avec le pack graphique + le streaming
-    // d'objets textés du serveur (SetObjectMaterialText → polices GDI), les
-    // allocations finissent par échouer (« Can't create font … ») puis le jeu
-    // plante. Poser le drapeau LAA porte la limite à ~4 Go. Best-effort :
-    // idempotent, avec sauvegarde ; un échec (exe verrouillé / droits) ne doit
-    // jamais empêcher de jouer.
-    let _ = crate::laa::set_large_address_aware(Path::new(&install.gta_exe));
-
     // 2) Lancement de samp.exe avec l'adresse du serveur.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let work_dir = Path::new(samp_exe).parent();
@@ -58,13 +49,14 @@ pub fn launch(install: &GameInstall, nickname: &str, host: &str, port: u16) -> R
         cmd.current_dir(dir);
     }
     cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd.spawn()
+    let child = cmd
+        .spawn()
         .map_err(|e| LauncherError::Io(format!("impossible de lancer samp.exe : {e}")))?;
-    Ok(())
+    Ok(child.id())
 }
 
 #[cfg(not(windows))]
-pub fn launch(_install: &GameInstall, _nickname: &str, _host: &str, _port: u16) -> Result<()> {
+pub fn launch(_install: &GameInstall, _nickname: &str, _host: &str, _port: u16) -> Result<u32> {
     Err(LauncherError::Other(
         "Le lancement du jeu n'est disponible que sous Windows.".into(),
     ))

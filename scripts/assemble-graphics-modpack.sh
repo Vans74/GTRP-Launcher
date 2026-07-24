@@ -371,6 +371,15 @@ json.dump(manifest, open(out, "w"), indent=2, ensure_ascii=False)
 print("manifest écrit avec", len(files), "fichier(s) config différentiel(s)")
 PY
 
+# Ajoute l'inventaire exhaustif : jeu de base, staging, contenus permanents et
+# profil HD. Toute nouvelle ressource du staging est prise en compte
+# automatiquement ; une collision de chemins ou un composant incomplet bloque
+# l'assemblage.
+python3 "$SCRIPTS/build-integrity-policy.py" \
+  --manifest "$ROOT/modpack-work/manifest.json" \
+  --staging "$STAGING" \
+  --base "$ROOT/assets/base-game-integrity.json"
+
 echo ""
 echo "=== TERMINÉ (rien publié) ==="
 echo "Zip      : $OUT"

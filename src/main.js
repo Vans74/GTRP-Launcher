@@ -379,8 +379,17 @@ async function preloadSampCache() {
 }
 
 async function launch() {
+  state.updating = true;
+  updatePlayButton();
+  toast(
+    "Contrôle intégral et authentification de l’installation GTRP…",
+    "info",
+    0,
+    "integrity-check",
+  );
   try {
     const graphics = await call("launch_game");
+    clearNotice("integrity-check");
     if (graphics?.message) {
       const kind = graphics.applied ? "success" : "info";
       toast(graphics.message, kind);
@@ -388,7 +397,11 @@ async function launch() {
       toast("Lancement du jeu…", "success");
     }
   } catch (e) {
+    clearNotice("integrity-check");
     toast(`${e}`, "error");
+  } finally {
+    state.updating = false;
+    updatePlayButton();
   }
 }
 
@@ -464,6 +477,15 @@ async function init() {
     listen("update-progress", (event) => {
       const p = event.payload;
       setProgress(p.bytes_done, p.bytes_total, p.current_file);
+    });
+    listen("integrity-violation", (event) => {
+      const issue = event.payload;
+      toast(
+        `${issue?.message || "Modification non autorisée détectée : la session a été fermée."}`,
+        "error",
+        0,
+        "integrity-violation",
+      );
     });
   }
 
