@@ -66,6 +66,17 @@ fn violation(kind: &str, message: String, path: Option<String>) -> RuntimeViolat
     }
 }
 
+fn path_key(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn path_is_within(path: &str, root: &str) -> bool {
+    path == root || path.starts_with(&format!("{root}/"))
+}
+
 #[cfg(windows)]
 fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -160,6 +171,8 @@ mod windows {
         OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
         PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
     };
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
 
     fn wide_string(value: &[u16]) -> String {
         let length = value
@@ -236,19 +249,100 @@ mod windows {
         Some(result)
     }
 
-    fn windows_root() -> String {
-        std::env::var_os("WINDIR")
+    fn system_root_path() -> PathBuf {
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        hklm.open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+            .ok()
+            .and_then(|key| key.get_value::<String, _>("SystemRoot").ok())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
-            .to_string_lossy()
-            .replace('\\', "/")
-            .to_ascii_lowercase()
+    }
+
+    fn windows_root() -> String {
+        path_key(&system_root_path())
+    }
+
+    fn expand_system_path(value: &str, system_root: &Path) -> PathBuf {
+        for variable in ["SystemRoot", "WINDIR"] {
+            let marker = format!("%{variable}%");
+            if value
+                .get(..marker.len())
+                .map(|prefix| prefix.eq_ignore_ascii_case(&marker))
+                .unwrap_or(false)
+            {
+                return system_root.join(
+                    value[marker.len()..]
+                        .trim_start_matches(|character| character == '\\' || character == '/'),
+                );
+            }
+        }
+        PathBuf::from(value)
+    }
+
+    fn protected_roots(system_root: &Path) -> Vec<String> {
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let mut roots = vec![path_key(system_root)];
+        if let Ok(key) = hklm.open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion") {
+            for value in [
+                "ProgramFilesDir",
+                "ProgramFilesDir (x86)",
+                "ProgramW6432Dir",
+            ] {
+                if let Ok(path) = key.get_value::<String, _>(value) {
+                    roots.push(path_key(Path::new(&path)));
+                }
+            }
+        }
+        roots.sort();
+        roots.dedup();
+        roots
+    }
+
+    /// Modules réseau que Windows charge lui-même dans toute application
+    /// utilisant Winsock (Bonjour, certains VPN d'entreprise, etc.).
+    ///
+    /// L'autorisation exige les trois propriétés suivantes :
+    /// - fournisseur d'espace de noms activé dans le catalogue HKLM ;
+    /// - chemin exact identique au module observé ;
+    /// - fichier situé sous Windows ou Program Files (donc non modifiable par
+    ///   un utilisateur standard).
+    pub(super) fn registered_namespace_modules() -> HashSet<String> {
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let system_root = system_root_path();
+        let protected = protected_roots(&system_root);
+        let mut modules = HashSet::new();
+        for catalog in [
+            r"SYSTEM\CurrentControlSet\Services\WinSock2\Parameters\NameSpace_Catalog5\Catalog_Entries",
+            r"SYSTEM\CurrentControlSet\Services\WinSock2\Parameters\NameSpace_Catalog5\Catalog_Entries64",
+        ] {
+            let Ok(entries) = hklm.open_subkey(catalog) else {
+                continue;
+            };
+            for name in entries.enum_keys().flatten() {
+                let Ok(entry) = entries.open_subkey(name) else {
+                    continue;
+                };
+                let enabled = entry.get_value::<u32, _>("Enabled").unwrap_or(0);
+                let Ok(library) = entry.get_value::<String, _>("LibraryPath") else {
+                    continue;
+                };
+                if enabled == 0 {
+                    continue;
+                }
+                let key = path_key(&expand_system_path(&library, &system_root));
+                if protected.iter().any(|root| path_is_within(&key, root)) {
+                    modules.insert(key);
+                }
+            }
+        }
+        modules
     }
 
     pub(super) fn validate_modules(
         pid: u32,
         root: &Path,
         expected: &HashMap<String, IntegrityFile>,
+        registered_namespace_modules: &HashSet<String>,
         verified: &mut HashSet<(u32, String)>,
         failures: &mut HashMap<u32, u8>,
     ) -> Option<RuntimeViolation> {
@@ -258,9 +352,7 @@ mod windows {
             if *attempts >= 3 {
                 return Some(violation(
                     "module_scan_error",
-                    format!(
-                        "Impossible de contrôler les modules chargés par le processus {pid}."
-                    ),
+                    format!("Impossible de contrôler les modules chargés par le processus {pid}."),
                     None,
                 ));
             }
@@ -275,6 +367,9 @@ mod windows {
                 continue;
             }
             let Some((rel, display)) = rel_key(root, &module) else {
+                if registered_namespace_modules.contains(&module_key) {
+                    continue;
+                }
                 return Some(violation(
                     "foreign_module",
                     format!("Module externe injecté dans GTA/SA-MP : {module_display}"),
@@ -344,6 +439,7 @@ where
     })?;
     let expected = expected_files(policy, hd_enabled);
     let mutable = policy.mutable_paths.clone();
+    let registered_namespace_modules = windows::registered_namespace_modules();
     let (sender, receiver) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = sender.send(event);
@@ -357,8 +453,7 @@ where
             LauncherError::Integrity(format!("Surveillance du dossier impossible : {error}"))
         })?;
 
-    let report =
-        crate::updater::verify_integrity_for_profile(&manifest, &gta_root, hd_enabled)?;
+    let report = crate::updater::verify_integrity_for_profile(&manifest, &gta_root, hd_enabled)?;
     if !report.ok {
         return Err(LauncherError::Integrity(format!(
             "L'installation a changé pendant l'armement de la surveillance ({} invalide(s), {} inattendu(s), {} jonction(s)).",
@@ -427,15 +522,14 @@ where
                 continue;
             }
             for pid in &pids {
-                if let Some(issue) =
-                    windows::validate_modules(
-                        *pid,
-                        &gta_root,
-                        &expected,
-                        &mut verified_modules,
-                        &mut module_scan_failures,
-                    )
-                {
+                if let Some(issue) = windows::validate_modules(
+                    *pid,
+                    &gta_root,
+                    &expected,
+                    &registered_namespace_modules,
+                    &mut verified_modules,
+                    &mut module_scan_failures,
+                ) {
                     windows::terminate(&pids);
                     on_violation(issue);
                     return;
@@ -513,5 +607,33 @@ mod tests {
         ));
         assert!(mutable_path_matches("modloader/modloader.log", &rules));
         assert!(!mutable_path_matches("modloader/cheat.asi", &rules));
+    }
+
+    #[test]
+    fn protected_path_boundary_is_strict() {
+        let root = "c:/program files (x86)";
+        assert!(path_is_within(
+            "c:/program files (x86)/bonjour/mdnsnsp.dll",
+            root
+        ));
+        assert!(!path_is_within(
+            "c:/program files (x86)-writable/cheat.dll",
+            root
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_namespace_catalog_contains_bonjour_when_installed() {
+        let modules = windows::registered_namespace_modules();
+        assert!(!modules.is_empty());
+        assert!(modules.iter().all(|module| Path::new(module).is_absolute()));
+
+        if let Some(program_files_x86) = std::env::var_os("ProgramFiles(x86)") {
+            let bonjour = PathBuf::from(program_files_x86).join(r"Bonjour\mdnsNSP.dll");
+            if bonjour.is_file() {
+                assert!(modules.contains(&path_key(&bonjour)));
+            }
+        }
     }
 }
